@@ -4,7 +4,48 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Project, ThumbnailMap } from "./types";
+import { Project, ThumbnailMap, PrintInfo, Consumable, SessionConsumable, PrintSession, PriceMode, Printer } from "./types";
+
+interface ConsFormData {
+  id: string;
+  name: string;
+  category: string;
+  price_mode: PriceMode;
+  price: string;
+}
+
+interface PrinterFormData {
+  id: string;
+  name: string;
+  power_w: string;
+}
+
+interface SessionForm {
+  id: string;
+  name: string;
+  file_3mf: string;
+  printer_id: string;
+  print_time_h: string;
+  consumables: SessionConsumable[];
+}
+
+function calcCost(c: Consumable, qty: number): number {
+  if (c.price_mode === "unit") return qty * c.price;
+  return (qty / 1000) * c.price;
+}
+function unitLabel(c: Consumable): string {
+  if (c.price_mode === "unit") return "unité(s)";
+  if (c.price_mode === "weight") return "g";
+  return "ml";
+}
+function priceUnitLabel(c: Consumable): string {
+  if (c.price_mode === "unit") return "€/unité";
+  if (c.price_mode === "weight") return "€/kg";
+  return "€/L";
+}
+function printerCost(p: Printer, hours: number, kwh: number): number {
+  return (p.power_w / 1000) * hours * kwh;
+}
 import { StlViewer } from "./StlViewer";
 import { ContextMenu, ContextMenuItem } from "./ContextMenu";
 import "./App.css";
@@ -16,7 +57,6 @@ function toolName(path: string): string {
   return path.split(/[\\/]/).at(-1)?.replace(/\.[^.]+$/, "") ?? path;
 }
 
-// Couleurs de tags déterministes par nom
 const TAG_PALETTE = [
   { bg: "#dbeafe", text: "#1e40af" },
   { bg: "#dcfce7", text: "#166534" },
@@ -47,6 +87,10 @@ function toCamelCasePreview(s: string): string {
   );
 }
 
+function newSessionId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
 function App() {
   const [rootFolder, setRootFolder] = useState<string | null>(
     () => localStorage.getItem(STORAGE_KEY)
@@ -58,50 +102,56 @@ function App() {
 
   const [thumbnails, setThumbnails] = useState<ThumbnailMap>({});
   const [stlData, setStlData] = useState<{ [k: string]: string | null }>({});
+  const [printInfoMap, setPrintInfoMap] = useState<{ [k: string]: PrintInfo }>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Drag & drop
   const [isDragging, setIsDragging] = useState(false);
 
-  // Outil externe (slicer)
   const [toolPath, setToolPath] = useState<string | null>(
     () => localStorage.getItem(TOOL_KEY)
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // Tags
   const [addingTag, setAddingTag] = useState(false);
   const [tagInput, setTagInput] = useState("");
   const [activeTagFilter, setActiveTagFilter] = useState<string | null>(null);
 
-  // Recherche
   const [search, setSearch] = useState("");
 
-  // Lecteur vidéo
+  const [consumables, setConsumables] = useState<Consumable[]>([]);
+  const [printers, setPrinters] = useState<Printer[]>([]);
+  const [electricityPrice, setElectricityPrice] = useState(0);
+  const [showConsumablesView, setShowConsumablesView] = useState(false);
+  const [consForm, setConsForm] = useState<ConsFormData | null>(null);
+  const [printerForm, setPrinterForm] = useState<PrinterFormData | null>(null);
+  const [editingKwh, setEditingKwh] = useState(false);
+  const [kwhInput, setKwhInput] = useState("");
+
+  // Sessions
+  const [sessionForm, setSessionForm] = useState<SessionForm | null>(null);
+  const [sessionConsPickId, setSessionConsPickId] = useState("");
+  const [sessionConsPickQty, setSessionConsPickQty] = useState("");
+
   const [videoModal, setVideoModal] = useState<{ src: string; name: string } | null>(null);
 
-  // Menu contextuel
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
     filePath: string;
   } | null>(null);
 
-  // Nouveau projet
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [newProjectTitle, setNewProjectTitle] = useState("");
   const [newProjectError, setNewProjectError] = useState<string | null>(null);
   const [newProjectLoading, setNewProjectLoading] = useState(false);
 
-  // Éditeur Markdown
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorTab, setEditorTab] = useState<"edit" | "preview">("edit");
   const [editorContent, setEditorContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Renommage
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -124,9 +174,18 @@ function App() {
     setEditorOpen(false);
     setRenaming(false);
     setNewProjectOpen(false);
+    setShowConsumablesView(false);
     try {
-      const result = await invoke<Project[]>("scan_projects", { folderPath });
+      const [result, cons, prints, kwh] = await Promise.all([
+        invoke<Project[]>("scan_projects", { folderPath }),
+        invoke<Consumable[]>("get_consumables", { rootPath: folderPath }).catch(() => [] as Consumable[]),
+        invoke<Printer[]>("get_printers", { rootPath: folderPath }).catch(() => [] as Printer[]),
+        invoke<number>("get_electricity_price", { rootPath: folderPath }).catch(() => 0),
+      ]);
       setProjects(result);
+      setConsumables(cons);
+      setPrinters(prints);
+      setElectricityPrice(kwh);
     } catch (e) {
       setError(String(e));
       setProjects([]);
@@ -144,12 +203,16 @@ function App() {
   useEffect(() => {
     setThumbnails({});
     setStlData({});
+    setPrintInfoMap({});
     if (!selected) return;
 
     for (const filename of selected.files_3mf) {
       const filePath = `${selected.path}\\${filename}`;
       invoke<string | null>("get_3mf_thumbnail", { filePath }).then((b64) =>
         setThumbnails((prev) => ({ ...prev, [filename]: b64 }))
+      );
+      invoke<PrintInfo>("get_3mf_print_info", { filePath }).then((info) =>
+        setPrintInfoMap((prev) => ({ ...prev, [filename]: info }))
       );
     }
 
@@ -169,9 +232,12 @@ function App() {
     setTagInput("");
     setSaveError(null);
     setRenameError(null);
+    setSessionForm(null);
+    setSessionConsPickId("");
+    setSessionConsPickQty("");
   }, [selected?.path]);
 
-  // ── Drag & Drop (Tauri OS-level) ──
+  // ── Drag & Drop ──
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -333,11 +399,181 @@ function App() {
     localStorage.removeItem(TOOL_KEY);
   };
 
+  // ── Consommables globaux ──
+
+  const openBlankConsForm = () =>
+    setConsForm({ id: "", name: "", category: "", price_mode: "unit", price: "" });
+
+  const handleSaveConsumable = async () => {
+    if (!consForm || !rootFolder) return;
+    const priceNum = parseFloat(consForm.price);
+    if (!consForm.name.trim() || isNaN(priceNum) || priceNum < 0) return;
+    const cons: Consumable = {
+      id: consForm.id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name: consForm.name.trim(),
+      category: consForm.category.trim(),
+      price_mode: consForm.price_mode,
+      price: priceNum,
+    };
+    const updated = consForm.id
+      ? consumables.map((c) => (c.id === consForm.id ? cons : c))
+      : [...consumables, cons];
+    await invoke("save_consumables", { rootPath: rootFolder, consumables: updated });
+    setConsumables(updated);
+    setConsForm(null);
+  };
+
+  const handleDeleteConsumable = async (id: string) => {
+    if (!rootFolder) return;
+    const updated = consumables.filter((c) => c.id !== id);
+    await invoke("save_consumables", { rootPath: rootFolder, consumables: updated });
+    setConsumables(updated);
+  };
+
+  // ── Imprimantes globales ──
+
+  const handleSavePrinter = async () => {
+    if (!printerForm || !rootFolder) return;
+    const wNum = parseFloat(printerForm.power_w);
+    if (!printerForm.name.trim() || isNaN(wNum) || wNum <= 0) return;
+    const p: Printer = {
+      id: printerForm.id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name: printerForm.name.trim(),
+      power_w: wNum,
+    };
+    const updated = printerForm.id
+      ? printers.map((pr) => (pr.id === printerForm.id ? p : pr))
+      : [...printers, p];
+    await invoke("save_printers", { rootPath: rootFolder, printers: updated });
+    setPrinters(updated);
+    setPrinterForm(null);
+  };
+
+  const handleDeletePrinter = async (id: string) => {
+    if (!rootFolder) return;
+    const updated = printers.filter((p) => p.id !== id);
+    await invoke("save_printers", { rootPath: rootFolder, printers: updated });
+    setPrinters(updated);
+  };
+
+  const handleSaveKwh = async () => {
+    if (!rootFolder) return;
+    const v = parseFloat(kwhInput);
+    if (isNaN(v) || v < 0) return;
+    await invoke("save_electricity_price", { rootPath: rootFolder, price: v });
+    setElectricityPrice(v);
+    setEditingKwh(false);
+  };
+
+  // ── Sessions d'impression ──
+
+  const persistSessions = async (sessions: PrintSession[], status: string) => {
+    if (!selected) return;
+    const updated = await invoke<Project>("save_project_sessions", {
+      projectPath: selected.path,
+      sessions,
+      status,
+    });
+    setSelected(updated);
+    setProjects((prev) => sortedInsert(prev, updated));
+  };
+
+  const handleChangeStatus = () => {
+    if (!selected) return;
+    const newStatus = selected.status === "done" ? "draft" : "done";
+    persistSessions(selected.sessions, newStatus);
+  };
+
+  const openNewSession = () => {
+    setSessionForm({
+      id: "",
+      name: "",
+      file_3mf: selected?.files_3mf[0] ?? "",
+      printer_id: printers[0]?.id ?? "",
+      print_time_h: "",
+      consumables: [],
+    });
+    setSessionConsPickId("");
+    setSessionConsPickQty("");
+  };
+
+  const openEditSession = (s: PrintSession) => {
+    setSessionForm({
+      id: s.id,
+      name: s.name,
+      file_3mf: s.file_3mf,
+      printer_id: s.printer_id,
+      print_time_h: s.print_time_h.toString(),
+      consumables: [...s.consumables],
+    });
+    setSessionConsPickId("");
+    setSessionConsPickQty("");
+  };
+
+  const addConsToSession = () => {
+    if (!sessionForm || !sessionConsPickId) return;
+    const qty = parseFloat(sessionConsPickQty);
+    if (isNaN(qty) || qty <= 0) return;
+    const existing = sessionForm.consumables.find((c) => c.consumable_id === sessionConsPickId);
+    const updated = existing
+      ? sessionForm.consumables.map((c) =>
+          c.consumable_id === sessionConsPickId ? { ...c, quantity: c.quantity + qty } : c
+        )
+      : [...sessionForm.consumables, { consumable_id: sessionConsPickId, quantity: qty }];
+    setSessionForm({ ...sessionForm, consumables: updated });
+    setSessionConsPickId("");
+    setSessionConsPickQty("");
+  };
+
+  const removeConsFromSession = (consumableId: string) => {
+    if (!sessionForm) return;
+    setSessionForm({
+      ...sessionForm,
+      consumables: sessionForm.consumables.filter((c) => c.consumable_id !== consumableId),
+    });
+  };
+
+  const handleSaveSession = async () => {
+    if (!selected || !sessionForm) return;
+    const h = parseFloat(sessionForm.print_time_h);
+    if (isNaN(h) || h <= 0) return;
+    const session: PrintSession = {
+      id: sessionForm.id || newSessionId(),
+      name: sessionForm.name.trim(),
+      file_3mf: sessionForm.file_3mf,
+      printer_id: sessionForm.printer_id,
+      print_time_h: h,
+      consumables: sessionForm.consumables,
+    };
+    const sessions = sessionForm.id
+      ? selected.sessions.map((s) => (s.id === session.id ? session : s))
+      : [...selected.sessions, session];
+    await persistSessions(sessions, selected.status);
+    setSessionForm(null);
+  };
+
+  const handleDeleteSession = async (id: string) => {
+    if (!selected) return;
+    await persistSessions(selected.sessions.filter((s) => s.id !== id), selected.status);
+  };
+
+  // ── Archivage & outils ──
+
   const handleOpenWith = (filePath: string) => {
     if (!toolPath) return;
     invoke("open_with_tool", { filePath, toolPath }).catch((e) =>
       alert(`Erreur : ${e}`)
     );
+  };
+
+  const handleArchiveFile = (filePath: string) => {
+    if (!selected) return;
+    invoke<Project>("archive_file", { filePath })
+      .then((updated) => {
+        setSelected(updated);
+        setProjects((prev) => sortedInsert(prev, updated));
+      })
+      .catch((e) => alert(`Erreur archivage : ${e}`));
   };
 
   const buildContextMenuItems = (filePath: string): ContextMenuItem[] => {
@@ -355,6 +591,11 @@ function App() {
         onClick: () => setSettingsOpen(true),
       });
     }
+    items.push({
+      label: "Archiver",
+      icon: "📦",
+      onClick: () => handleArchiveFile(filePath),
+    });
     return items;
   };
 
@@ -372,6 +613,17 @@ function App() {
   const totalFiles = selected
     ? selected.f3d_files.length + selected.files_3mf.length + selected.stl_files.length
     : 0;
+
+  // ── Calcul coût total d'une session ──
+  const sessionCost = (s: PrintSession): { mat: number; elec: number } => {
+    const mat = s.consumables.reduce((sum, sc) => {
+      const c = consumables.find((x) => x.id === sc.consumable_id);
+      return c ? sum + calcCost(c, sc.quantity) : sum;
+    }, 0);
+    const pr = printers.find((p) => p.id === s.printer_id);
+    const elec = pr ? printerCost(pr, s.print_time_h, electricityPrice) : 0;
+    return { mat, elec };
+  };
 
   return (
     <div className="app">
@@ -409,6 +661,15 @@ function App() {
             </button>
           </div>
         </div>
+
+        {rootFolder && (
+          <button
+            className={`sidebar-nav-btn ${showConsumablesView ? "active" : ""}`}
+            onClick={() => { setShowConsumablesView(true); setSelected(null); setConsForm(null); }}
+          >
+            🧵 Consommables
+          </button>
+        )}
 
         {rootFolder && (
           <div className="folder-info">
@@ -486,7 +747,6 @@ function App() {
           </div>
         )}
 
-        {/* Filtre tag actif */}
         {activeTagFilter && (
           <div className="tag-filter-bar">
             <span>🏷️ {activeTagFilter}</span>
@@ -506,10 +766,13 @@ function App() {
             <button
               key={project.path}
               className={`project-item ${selected?.path === project.path ? "active" : ""}`}
-              onClick={() => setSelected(project)}
+              onClick={() => { setSelected(project); setShowConsumablesView(false); }}
             >
               <span className="project-item-name">{displayName(project)}</span>
               <span className="project-item-meta">
+                {project.status === "done" && (
+                  <span className="badge badge-done">✓</span>
+                )}
                 {project.files_3mf.length > 0 && (
                   <span className="badge">{project.files_3mf.length} 3mf</span>
                 )}
@@ -562,6 +825,145 @@ function App() {
               Choisir un dossier
             </button>
           </div>
+        ) : showConsumablesView ? (
+          /* ── Vue ressources globales ── */
+          <div className="consumables-view">
+
+            {/* Section Consommables */}
+            <div className="global-section">
+              <div className="consumables-header">
+                <h2>Consommables</h2>
+                <button className="btn-primary-sm" onClick={openBlankConsForm}>+ Nouveau</button>
+              </div>
+              {consForm && (
+                <div className="cons-form">
+                  <input className="cons-form-input" placeholder="Nom *" autoFocus
+                    value={consForm.name} onChange={(e) => setConsForm({ ...consForm, name: e.target.value })} />
+                  <input className="cons-form-input" placeholder="Catégorie (ex : Filament, Résine…)"
+                    value={consForm.category} onChange={(e) => setConsForm({ ...consForm, category: e.target.value })} />
+                  <select className="cons-form-select" value={consForm.price_mode}
+                    onChange={(e) => setConsForm({ ...consForm, price_mode: e.target.value as PriceMode })}>
+                    <option value="unit">À l'unité (€/unité)</option>
+                    <option value="weight">Au poids (€/kg, quantité en g)</option>
+                    <option value="volume">Au volume (€/L, quantité en ml)</option>
+                  </select>
+                  <div className="cons-form-price-row">
+                    <input className="cons-form-input cons-form-price" type="number" min="0" step="0.001" placeholder="Prix *"
+                      value={consForm.price} onChange={(e) => setConsForm({ ...consForm, price: e.target.value })} />
+                    <span className="cons-form-unit">{priceUnitLabel({ ...consForm, price: 0, id: "" })}</span>
+                  </div>
+                  <div className="cons-form-actions">
+                    <button className="btn-cancel" onClick={() => setConsForm(null)}>Annuler</button>
+                    <button className="btn-save" onClick={handleSaveConsumable}
+                      disabled={!consForm.name.trim() || !consForm.price || isNaN(parseFloat(consForm.price))}>
+                      {consForm.id ? "Mettre à jour" : "Créer"}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {consumables.length === 0 && !consForm
+                ? <p className="empty-files" style={{ padding: "16px 0" }}>Aucun consommable.</p>
+                : <div className="cons-list">
+                    {[...consumables]
+                      .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name))
+                      .map((c) => (
+                      <div key={c.id} className="cons-item">
+                        <div className="cons-item-info">
+                          <span className="cons-item-name">{c.name}</span>
+                          {c.category && <span className="cons-item-category">{c.category}</span>}
+                        </div>
+                        <span className="cons-item-price">{c.price.toFixed(3)} {priceUnitLabel(c)}</span>
+                        <div className="cons-item-actions">
+                          <button className="btn-icon-sm" title="Modifier"
+                            onClick={() => setConsForm({ ...c, price: c.price.toString() })}>✏</button>
+                          <button className="btn-icon-sm btn-danger-icon" title="Supprimer"
+                            onClick={() => handleDeleteConsumable(c.id)}>🗑</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+              }
+            </div>
+
+            {/* Section Électricité */}
+            <div className="global-section">
+              <div className="consumables-header">
+                <h2>⚡ Électricité</h2>
+              </div>
+              <div className="kwh-row">
+                <span className="kwh-label">Prix du kWh</span>
+                {editingKwh ? (
+                  <>
+                    <input className="kwh-input" type="number" min="0" step="0.0001" autoFocus
+                      value={kwhInput} onChange={(e) => setKwhInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") handleSaveKwh(); if (e.key === "Escape") setEditingKwh(false); }} />
+                    <span className="kwh-unit">€/kWh</span>
+                    <button className="btn-save" onClick={handleSaveKwh}>OK</button>
+                    <button className="btn-cancel" onClick={() => setEditingKwh(false)}>Annuler</button>
+                  </>
+                ) : (
+                  <>
+                    <span className="kwh-value">{electricityPrice.toFixed(4)} €/kWh</span>
+                    <button className="btn-icon-sm" title="Modifier"
+                      onClick={() => { setKwhInput(electricityPrice.toString()); setEditingKwh(true); }}>✏</button>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Section Imprimantes */}
+            <div className="global-section">
+              <div className="consumables-header">
+                <h2>🖨 Imprimantes</h2>
+                <button className="btn-primary-sm"
+                  onClick={() => setPrinterForm({ id: "", name: "", power_w: "" })}>+ Ajouter</button>
+              </div>
+              {printerForm && (
+                <div className="cons-form">
+                  <input className="cons-form-input" placeholder="Nom de l'imprimante *" autoFocus
+                    value={printerForm.name} onChange={(e) => setPrinterForm({ ...printerForm, name: e.target.value })} />
+                  <div className="cons-form-price-row">
+                    <input className="cons-form-input cons-form-price" type="number" min="0" step="1"
+                      placeholder="Consommation *"
+                      value={printerForm.power_w} onChange={(e) => setPrinterForm({ ...printerForm, power_w: e.target.value })} />
+                    <span className="cons-form-unit">W</span>
+                  </div>
+                  <div className="cons-form-actions">
+                    <button className="btn-cancel" onClick={() => setPrinterForm(null)}>Annuler</button>
+                    <button className="btn-save" onClick={handleSavePrinter}
+                      disabled={!printerForm.name.trim() || !printerForm.power_w || isNaN(parseFloat(printerForm.power_w))}>
+                      {printerForm.id ? "Mettre à jour" : "Ajouter"}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {printers.length === 0 && !printerForm
+                ? <p className="empty-files" style={{ padding: "16px 0" }}>Aucune imprimante configurée.</p>
+                : <div className="cons-list">
+                    {printers.map((p) => (
+                      <div key={p.id} className="cons-item">
+                        <div className="cons-item-info">
+                          <span className="cons-item-name">{p.name}</span>
+                        </div>
+                        <span className="cons-item-price">{p.power_w} W</span>
+                        {electricityPrice > 0 && (
+                          <span className="cons-item-kwh-hint">
+                            {((p.power_w / 1000) * electricityPrice).toFixed(4)} €/h
+                          </span>
+                        )}
+                        <div className="cons-item-actions">
+                          <button className="btn-icon-sm" title="Modifier"
+                            onClick={() => setPrinterForm({ ...p, power_w: p.power_w.toString() })}>✏</button>
+                          <button className="btn-icon-sm btn-danger-icon" title="Supprimer"
+                            onClick={() => handleDeletePrinter(p.id)}>🗑</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+              }
+            </div>
+          </div>
+
         ) : !selected ? (
           <div className="empty-state">
             <div className="empty-icon">🖨️</div>
@@ -632,7 +1034,6 @@ function App() {
         ) : (
           /* ── Vue projet ── */
           <div className="project-detail">
-            {/* Overlay drag & drop */}
             {isDragging && (
               <div className="drop-overlay">
                 <div className="drop-overlay-inner">
@@ -643,7 +1044,7 @@ function App() {
               </div>
             )}
 
-            {/* En-tête avec renommage */}
+            {/* En-tête */}
             {renaming ? (
               <div className="rename-form">
                 <input
@@ -694,17 +1095,26 @@ function App() {
                   <h1 className="detail-title">{displayName(selected)}</h1>
                   <span className="folder-badge">📁 {selected.name}</span>
                 </div>
-                <button
-                  className="btn-rename"
-                  onClick={() => {
-                    setRenameValue(displayName(selected));
-                    setRenameError(null);
-                    setRenaming(true);
-                  }}
-                  title="Renommer le projet"
-                >
-                  ✏️ Renommer
-                </button>
+                <div className="detail-title-actions">
+                  <button
+                    className={`status-badge ${selected.status === "done" ? "status-done" : "status-draft"}`}
+                    onClick={handleChangeStatus}
+                    title="Cliquer pour changer le statut"
+                  >
+                    {selected.status === "done" ? "✓ Terminé" : "✏ Brouillon"}
+                  </button>
+                  <button
+                    className="btn-rename"
+                    onClick={() => {
+                      setRenameValue(displayName(selected));
+                      setRenameError(null);
+                      setRenaming(true);
+                    }}
+                    title="Renommer le projet"
+                  >
+                    ✏️ Renommer
+                  </button>
+                </div>
               </div>
             )}
 
@@ -758,7 +1168,7 @@ function App() {
               )}
             </div>
 
-            {/* Fichiers d'impression : 3MF + STL */}
+            {/* Fichiers d'impression */}
             {(selected.files_3mf.length > 0 || selected.stl_files.length > 0) && (
               <section className="detail-section">
                 <h2>Fichiers d'impression</h2>
@@ -766,6 +1176,8 @@ function App() {
                   {selected.files_3mf.map((file) => {
                     const b64 = thumbnails[file];
                     const isLoading = !(file in thumbnails);
+                    const info = printInfoMap[file];
+                    const hasInfo = info && (info.print_time !== null || info.weight_g !== null);
                     return (
                       <div
                         key={file}
@@ -786,6 +1198,16 @@ function App() {
                         </div>
                         <span className="thumb-type-badge">3MF</span>
                         <span className="thumb-label" title={file}>{file}</span>
+                        {hasInfo && (
+                          <div className="thumb-print-info">
+                            {info.print_time && (
+                              <span className="thumb-print-stat">⏱ {info.print_time}</span>
+                            )}
+                            {info.weight_g !== null && (
+                              <span className="thumb-print-stat">⚖ {info.weight_g!.toFixed(1)} g</span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -843,7 +1265,7 @@ function App() {
               </section>
             )}
 
-            {/* Timelapses MP4 */}
+            {/* Timelapses */}
             {selected.mp4_files.length > 0 && (
               <section className="detail-section">
                 <h2>Timelapses</h2>
@@ -873,6 +1295,223 @@ function App() {
               </section>
             )}
 
+            {/* Sessions d'impression */}
+            <section className="detail-section">
+              <div className="section-header-row">
+                <h2>Sessions d'impression</h2>
+                {!sessionForm && (
+                  <button className="btn-primary-sm" onClick={openNewSession}>
+                    + Nouvelle session
+                  </button>
+                )}
+              </div>
+
+              {/* Formulaire session */}
+              {sessionForm && (
+                <div className="session-form">
+                  <div className="session-form-row">
+                    <label>Nom de la session</label>
+                    <input
+                      className="cons-form-input"
+                      placeholder="ex : Plateau principal, Test support…"
+                      value={sessionForm.name}
+                      onChange={(e) => setSessionForm({ ...sessionForm, name: e.target.value })}
+                    />
+                  </div>
+                  <div className="session-form-row">
+                    <label>Fichier 3MF</label>
+                    {selected.files_3mf.length > 0 ? (
+                      <select
+                        className="cons-form-select"
+                        value={sessionForm.file_3mf}
+                        onChange={(e) => setSessionForm({ ...sessionForm, file_3mf: e.target.value })}
+                      >
+                        {selected.files_3mf.map((f) => (
+                          <option key={f} value={f}>{f}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        className="cons-form-input"
+                        placeholder="nom-du-fichier.3mf"
+                        value={sessionForm.file_3mf}
+                        onChange={(e) => setSessionForm({ ...sessionForm, file_3mf: e.target.value })}
+                      />
+                    )}
+                  </div>
+                  <div className="session-form-row">
+                    <label>Imprimante</label>
+                    {printers.length > 0 ? (
+                      <select
+                        className="cons-form-select"
+                        value={sessionForm.printer_id}
+                        onChange={(e) => setSessionForm({ ...sessionForm, printer_id: e.target.value })}
+                      >
+                        {printers.map((p) => (
+                          <option key={p.id} value={p.id}>{p.name} — {p.power_w} W</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="session-form-hint">Aucune imprimante — configure-en dans Consommables</span>
+                    )}
+                  </div>
+                  <div className="session-form-row">
+                    <label>Durée d'impression</label>
+                    <div className="cons-form-price-row">
+                      <input
+                        className="cons-form-input cons-form-price"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="0.00"
+                        value={sessionForm.print_time_h}
+                        onChange={(e) => setSessionForm({ ...sessionForm, print_time_h: e.target.value })}
+                      />
+                      <span className="cons-form-unit">h</span>
+                    </div>
+                  </div>
+
+                  {/* Consommables de la session */}
+                  <div className="session-form-cons-section">
+                    <span className="session-form-cons-label">Consommables</span>
+                    {sessionForm.consumables.length > 0 && (
+                      <div className="session-form-cons-list">
+                        {sessionForm.consumables.map((sc) => {
+                          const c = consumables.find((x) => x.id === sc.consumable_id);
+                          return (
+                            <div key={sc.consumable_id} className="session-form-cons-row">
+                              <span className="session-form-cons-name">{c?.name ?? "?"}</span>
+                              <span className="session-form-cons-qty">{sc.quantity} {c ? unitLabel(c) : ""}</span>
+                              <button
+                                className="btn-icon-sm btn-danger-icon"
+                                onClick={() => removeConsFromSession(sc.consumable_id)}
+                              >🗑</button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {consumables.length > 0 && (
+                      <div className="cost-add-form">
+                        <select
+                          className="cost-add-select"
+                          value={sessionConsPickId}
+                          onChange={(e) => setSessionConsPickId(e.target.value)}
+                        >
+                          <option value="">+ Ajouter un consommable…</option>
+                          {[...consumables]
+                            .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name))
+                            .map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.category ? `[${c.category}] ` : ""}{c.name}
+                              </option>
+                            ))}
+                        </select>
+                        <input
+                          className="cost-add-qty"
+                          type="number"
+                          min="0"
+                          step="any"
+                          placeholder="Qté"
+                          value={sessionConsPickQty}
+                          onChange={(e) => setSessionConsPickQty(e.target.value)}
+                        />
+                        {sessionConsPickId && (
+                          <span className="cost-add-unit">
+                            {unitLabel(consumables.find((c) => c.id === sessionConsPickId)!)}
+                          </span>
+                        )}
+                        <button
+                          className="btn-save"
+                          onClick={addConsToSession}
+                          disabled={!sessionConsPickId || !sessionConsPickQty || parseFloat(sessionConsPickQty) <= 0}
+                        >
+                          Ajouter
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="cons-form-actions">
+                    <button className="btn-cancel" onClick={() => setSessionForm(null)}>Annuler</button>
+                    <button
+                      className="btn-save"
+                      onClick={handleSaveSession}
+                      disabled={!sessionForm.print_time_h || parseFloat(sessionForm.print_time_h) <= 0}
+                    >
+                      {sessionForm.id ? "Mettre à jour" : "Créer la session"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Liste des sessions */}
+              {selected.sessions.length === 0 && !sessionForm ? (
+                <p className="empty-files">Aucune session d'impression enregistrée.</p>
+              ) : (
+                <div className="session-list">
+                  {selected.sessions.map((s, idx) => {
+                    const pr = printers.find((p) => p.id === s.printer_id);
+                    const { mat, elec } = sessionCost(s);
+                    const total = mat + elec;
+                    return (
+                      <div key={s.id} className="session-card">
+                        <div className="session-card-header">
+                          <span className="session-card-index">#{idx + 1}</span>
+                          <span className="session-card-name">
+                            {s.name || s.file_3mf || "Session sans nom"}
+                          </span>
+                          <div className="session-card-actions">
+                            <button className="btn-icon-sm" title="Modifier" onClick={() => openEditSession(s)}>✏</button>
+                            <button className="btn-icon-sm btn-danger-icon" title="Supprimer" onClick={() => handleDeleteSession(s.id)}>🗑</button>
+                          </div>
+                        </div>
+                        <div className="session-card-meta">
+                          {s.file_3mf && <span className="session-meta-chip">📦 {s.file_3mf}</span>}
+                          {pr && <span className="session-meta-chip">🖨 {pr.name}</span>}
+                          <span className="session-meta-chip">⏱ {s.print_time_h} h</span>
+                        </div>
+                        {s.consumables.length > 0 && (
+                          <div className="session-cons-list">
+                            {s.consumables.map((sc) => {
+                              const c = consumables.find((x) => x.id === sc.consumable_id);
+                              return (
+                                <span key={sc.consumable_id} className="session-cons-chip">
+                                  {c?.name ?? "?"} × {sc.quantity}{c ? ` ${unitLabel(c)}` : ""}
+                                  {c ? ` — ${calcCost(c, sc.quantity).toFixed(2)} €` : ""}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {(mat > 0 || elec > 0) && (
+                          <div className="session-card-cost">
+                            {mat > 0 && <span>Matière : {mat.toFixed(2)} €</span>}
+                            {elec > 0 && <span>Électricité : {elec.toFixed(3)} €</span>}
+                            <span className="session-card-total">Total : {total.toFixed(2)} €</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Coût global */}
+              {selected.sessions.length > 1 && (() => {
+                const grand = selected.sessions.reduce((acc, s) => {
+                  const { mat, elec } = sessionCost(s);
+                  return { mat: acc.mat + mat, elec: acc.elec + elec };
+                }, { mat: 0, elec: 0 });
+                return (
+                  <div className="cost-total" style={{ marginTop: 8 }}>
+                    Total projet : {(grand.mat + grand.elec).toFixed(2)} €
+                    {grand.elec > 0 && ` (dont ${grand.elec.toFixed(3)} € élec.)`}
+                  </div>
+                );
+              })()}
+            </section>
+
             {/* Description Markdown */}
             <section className="detail-section">
               <div className="section-header-row">
@@ -897,8 +1536,7 @@ function App() {
                 </div>
               ) : (
                 <p className="empty-files">
-                  Aucun fichier main.md — clique sur "Créer" pour en rédiger
-                  un.
+                  Aucun fichier main.md — clique sur "Créer" pour en rédiger un.
                 </p>
               )}
             </section>

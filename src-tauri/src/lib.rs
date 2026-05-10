@@ -4,6 +4,38 @@ use std::path::Path;
 use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Consumable {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub price_mode: String,  // "unit" | "weight" | "volume"
+    pub price: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Printer {
+    pub id: String,
+    pub name: String,
+    pub power_w: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SessionConsumable {
+    pub consumable_id: String,
+    pub quantity: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PrintSession {
+    pub id: String,
+    pub name: String,
+    pub file_3mf: String,
+    pub printer_id: String,
+    pub print_time_h: f64,
+    pub consumables: Vec<SessionConsumable>,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Project {
     pub name: String,
@@ -15,6 +47,8 @@ pub struct Project {
     pub stl_files: Vec<String>,
     pub mp4_files: Vec<String>,
     pub markdown_content: Option<String>,
+    pub status: String,
+    pub sessions: Vec<PrintSession>,
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -22,21 +56,23 @@ pub struct Project {
 struct Meta {
     title: Option<String>,
     tags: Vec<String>,
+    status: String,
+    sessions: Vec<PrintSession>,
 }
 
 fn read_meta(dir: &Path) -> Meta {
-    let Ok(content) = fs::read_to_string(dir.join("meta.json")) else {
-        return Meta { title: None, tags: Vec::new() };
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return Meta { title: None, tags: Vec::new() };
-    };
+    let empty = Meta { title: None, tags: Vec::new(), status: "draft".into(), sessions: Vec::new() };
+    let Ok(content) = fs::read_to_string(dir.join("meta.json")) else { return empty };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else { return empty };
     let title = v["title"].as_str().map(|s| s.to_string());
-    let tags = v["tags"]
-        .as_array()
+    let tags = v["tags"].as_array()
         .map(|arr| arr.iter().filter_map(|t| t.as_str().map(str::to_string)).collect())
         .unwrap_or_default();
-    Meta { title, tags }
+    let status = v["status"].as_str().unwrap_or("draft").to_string();
+    let sessions = v["sessions"].as_array()
+        .map(|arr| arr.iter().filter_map(|i| serde_json::from_value::<PrintSession>(i.clone()).ok()).collect())
+        .unwrap_or_default();
+    Meta { title, tags, status, sessions }
 }
 
 fn to_camel_case(s: &str) -> String {
@@ -117,6 +153,8 @@ fn scan_project_dir(path: &Path) -> Project {
         stl_files,
         mp4_files,
         markdown_content,
+        status: meta.status,
+        sessions: meta.sessions,
     }
 }
 
@@ -162,7 +200,10 @@ fn scan_projects(folder_path: String) -> Result<Vec<Project>, String> {
     let mut projects: Vec<Project> = fs::read_dir(path)
         .map_err(|e| e.to_string())?
         .flatten()
-        .filter(|e| e.path().is_dir())
+        .filter(|e| {
+            let p = e.path();
+            p.is_dir() && p.file_name().and_then(|n| n.to_str()) != Some("_meta")
+        })
         .map(|e| scan_project_dir(&e.path()))
         .collect();
 
@@ -288,6 +329,266 @@ fn read_file_base64(file_path: String) -> Result<Option<String>, String> {
     Ok(Some(general_purpose::STANDARD.encode(&bytes)))
 }
 
+// ── Consommables ──────────────────────────────────────────────────────────────
+
+fn consumables_path(root: &Path) -> std::path::PathBuf {
+    root.join("_meta").join("consumables.json")
+}
+fn printers_path(root: &Path) -> std::path::PathBuf {
+    root.join("_meta").join("printers.json")
+}
+fn settings_path(root: &Path) -> std::path::PathBuf {
+    root.join("_meta").join("settings.json")
+}
+
+#[tauri::command]
+fn get_consumables(root_path: String) -> Result<Vec<Consumable>, String> {
+    let path = consumables_path(Path::new(&root_path));
+    if !path.exists() { return Ok(Vec::new()); }
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_consumables(root_path: String, consumables: Vec<Consumable>) -> Result<(), String> {
+    let meta_dir = Path::new(&root_path).join("_meta");
+    fs::create_dir_all(&meta_dir).map_err(|e| e.to_string())?;
+    fs::write(
+        meta_dir.join("consumables.json"),
+        serde_json::to_string_pretty(&consumables).map_err(|e| e.to_string())?,
+    ).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_printers(root_path: String) -> Result<Vec<Printer>, String> {
+    let path = printers_path(Path::new(&root_path));
+    if !path.exists() { return Ok(Vec::new()); }
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_printers(root_path: String, printers: Vec<Printer>) -> Result<(), String> {
+    let meta_dir = Path::new(&root_path).join("_meta");
+    fs::create_dir_all(&meta_dir).map_err(|e| e.to_string())?;
+    fs::write(
+        meta_dir.join("printers.json"),
+        serde_json::to_string_pretty(&printers).map_err(|e| e.to_string())?,
+    ).map_err(|e| e.to_string())
+}
+
+
+#[tauri::command]
+fn get_electricity_price(root_path: String) -> f64 {
+    let path = settings_path(Path::new(&root_path));
+    fs::read_to_string(&path).ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v["electricity_price_kwh"].as_f64())
+        .unwrap_or(0.0)
+}
+
+#[tauri::command]
+fn save_electricity_price(root_path: String, price: f64) -> Result<(), String> {
+    let meta_dir = Path::new(&root_path).join("_meta");
+    fs::create_dir_all(&meta_dir).map_err(|e| e.to_string())?;
+    let spath = meta_dir.join("settings.json");
+    let mut settings = fs::read_to_string(&spath).ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .unwrap_or(serde_json::json!({}));
+    settings["electricity_price_kwh"] = serde_json::json!(price);
+    fs::write(&spath, serde_json::to_string_pretty(&settings).unwrap())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_project_sessions(
+    project_path: String,
+    sessions: Vec<PrintSession>,
+    status: String,
+) -> Result<Project, String> {
+    let path = Path::new(&project_path);
+    let mut meta = read_meta_json(path);
+    meta["sessions"] = serde_json::to_value(&sessions).map_err(|e| e.to_string())?;
+    meta["status"] = serde_json::json!(status);
+    fs::write(
+        path.join("meta.json"),
+        serde_json::to_string_pretty(&meta).unwrap(),
+    ).map_err(|e| e.to_string())?;
+    Ok(scan_project_dir(path))
+}
+
+// ── Infos d'impression 3MF ────────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct PrintInfo {
+    pub print_time: Option<String>,
+    pub weight_g: Option<f64>,
+}
+
+fn format_duration(secs: u64) -> String {
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    if h > 0 { format!("{}h {:02}m", h, m) } else { format!("{} min", m) }
+}
+
+fn parse_slice_info_json(content: &str, info: &mut PrintInfo) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(content) else { return };
+
+    if info.weight_g.is_none() {
+        if let Some(w) = v["weight"].as_f64() {
+            info.weight_g = Some(w);
+        } else if let Some(w) = v["weight"].as_str().and_then(|s| s.parse::<f64>().ok()) {
+            info.weight_g = Some(w);
+        } else if let Some(filaments) = v["filament"].as_array() {
+            let total: f64 = filaments.iter()
+                .filter_map(|f| f["used_g"].as_f64()
+                    .or_else(|| f["used_g"].as_str().and_then(|s| s.parse().ok())))
+                .sum();
+            if total > 0.0 { info.weight_g = Some(total); }
+        }
+    }
+
+    if info.print_time.is_none() {
+        if let Some(secs) = v["prediction"].as_u64() {
+            info.print_time = Some(format_duration(secs));
+        } else if let Some(secs) = v["prediction"].as_f64() {
+            info.print_time = Some(format_duration(secs as u64));
+        }
+    }
+}
+
+fn parse_slic3r_config(content: &str, info: &mut PrintInfo) {
+    for line in content.lines() {
+        let stripped = line.trim_start_matches(';').trim();
+        let Some(eq) = stripped.find('=') else { continue };
+        let key = stripped[..eq].trim().to_lowercase();
+        let val = stripped[eq + 1..].trim();
+
+        if info.print_time.is_none()
+            && key.contains("estimated printing time")
+            && key.contains("normal")
+        {
+            info.print_time = Some(val.to_string());
+        } else if info.weight_g.is_none() && key == "filament used [g]" {
+            let total: f64 = val.split(',')
+                .filter_map(|s| s.trim().parse::<f64>().ok())
+                .sum();
+            if total > 0.0 { info.weight_g = Some(total); }
+        }
+    }
+}
+
+enum XmlVal { HumanTime, Seconds, Grams }
+
+fn parse_3dmodel_xml(content: &str, info: &mut PrintInfo) {
+    use XmlVal::*;
+    let candidates: &[(&str, XmlVal)] = &[
+        // PrusaSlicer / SuperSlicer
+        ("slic3rpe:estimated_printing_time_normal_mode", HumanTime),
+        ("estimated_printing_time_normal_mode",          HumanTime),
+        ("slic3rpe:filament_used_g",                     Grams),
+        ("filament_used_g",                              Grams),
+        // Cura / Creality Slicer
+        ("cura:print_time",       Seconds),
+        ("cura:material_weight",  Grams),
+        ("cura:material_mass",    Grams),
+    ];
+    for (pattern, kind) in candidates {
+        match kind {
+            HumanTime | Seconds if info.print_time.is_some() => continue,
+            Grams if info.weight_g.is_some() => continue,
+            _ => {}
+        }
+        if let Some(idx) = content.find(pattern) {
+            if let Some(gt) = content[idx..].find('>') {
+                let rest = &content[idx + gt + 1..];
+                if let Some(lt) = rest.find('<') {
+                    let val = rest[..lt].trim();
+                    if val.is_empty() { continue; }
+                    match kind {
+                        HumanTime => info.print_time = Some(val.to_string()),
+                        Seconds => {
+                            if let Ok(s) = val.parse::<f64>() {
+                                info.print_time = Some(format_duration(s as u64));
+                            }
+                        }
+                        Grams => info.weight_g = val.parse::<f64>().ok(),
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn archive_file(file_path: String) -> Result<Project, String> {
+    let src = Path::new(&file_path);
+    if !src.is_file() {
+        return Err(format!("Fichier introuvable : {}", file_path));
+    }
+    let project_dir = src.parent().ok_or("Chemin invalide")?;
+    let archives_dir = project_dir.join("archives");
+    fs::create_dir_all(&archives_dir).map_err(|e| e.to_string())?;
+
+    let filename = src.file_name().ok_or("Nom de fichier invalide")?;
+    let candidate = archives_dir.join(filename);
+    let dest = if candidate.exists() {
+        let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+        let ext  = src.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let ts   = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if ext.is_empty() {
+            archives_dir.join(format!("{}_{}", stem, ts))
+        } else {
+            archives_dir.join(format!("{}_{}.{}", stem, ts, ext))
+        }
+    } else {
+        candidate
+    };
+
+    fs::rename(src, &dest).map_err(|e| format!("Erreur archivage : {}", e))?;
+    Ok(scan_project_dir(project_dir))
+}
+
+#[tauri::command]
+fn get_3mf_print_info(file_path: String) -> PrintInfo {
+    let Ok(file) = fs::File::open(&file_path) else { return PrintInfo::default() };
+    let Ok(mut archive) = zip::ZipArchive::new(file) else { return PrintInfo::default() };
+
+    let mut info = PrintInfo::default();
+
+    // OrcaSlicer / BambuStudio
+    if let Ok(mut entry) = archive.by_name("Metadata/slice_info.config") {
+        let mut content = String::new();
+        let _ = entry.read_to_string(&mut content);
+        parse_slice_info_json(&content, &mut info);
+    }
+
+    // PrusaSlicer / SuperSlicer
+    if info.print_time.is_none() || info.weight_g.is_none() {
+        if let Ok(mut entry) = archive.by_name("Metadata/Slic3r_PE.config") {
+            let mut content = String::new();
+            let _ = entry.read_to_string(&mut content);
+            parse_slic3r_config(&content, &mut info);
+        }
+    }
+
+    // Fallback XML (limité aux 128 Ko du début du fichier)
+    if info.print_time.is_none() || info.weight_g.is_none() {
+        if let Ok(mut entry) = archive.by_name("3D/3dmodel.model") {
+            let mut buf = vec![0u8; 131_072];
+            let n = entry.read(&mut buf).unwrap_or(0);
+            if let Ok(content) = std::str::from_utf8(&buf[..n]) {
+                parse_3dmodel_xml(content, &mut info);
+            }
+        }
+    }
+
+    info
+}
+
 // ── Miniatures 3MF ────────────────────────────────────────────────────────────
 
 const THUMBNAIL_PATHS: &[&str] = &[
@@ -349,9 +650,18 @@ pub fn run() {
             copy_files_to_project,
             save_markdown,
             get_3mf_thumbnail,
+            get_3mf_print_info,
+            archive_file,
             read_file_base64,
             open_with_tool,
             save_tags,
+            get_consumables,
+            save_consumables,
+            get_printers,
+            save_printers,
+            get_electricity_price,
+            save_electricity_price,
+            save_project_sessions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

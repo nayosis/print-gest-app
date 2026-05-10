@@ -909,6 +909,24 @@ body {
   line-height: 1.3;
 }
 
+.thumb-print-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+}
+
+.thumb-print-stat {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: #3b5bdb;
+  background: #eef2ff;
+  border-radius: 4px;
+  padding: 2px 6px;
+  text-align: center;
+}
+
 /* ── Grille timelapses ── */
 .video-grid {
   display: grid;
@@ -1180,6 +1198,203 @@ body {
   word-break: break-all;
 }
 
+/* ── Navigation sidebar (Consommables) ── */
+.sidebar-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 14px;
+  background: none;
+  border: none;
+  border-left: 3px solid transparent;
+  color: var(--text-sidebar-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s, color 0.1s;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.sidebar-nav-btn:hover { background: var(--bg-sidebar-hover); color: var(--text-sidebar); }
+.sidebar-nav-btn.active { border-left-color: var(--accent); color: var(--accent); background: var(--bg-sidebar-active); }
+
+/* ── Vue consommables ── */
+.consumables-view {
+  padding: 32px 40px;
+  max-width: 720px;
+}
+
+.consumables-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid var(--border);
+}
+
+.consumables-header h2 {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-content);
+}
+
+/* Sections dans la vue globale */
+.global-section {
+  margin-bottom: 36px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--border);
+}
+.global-section:last-child { border-bottom: none; }
+
+/* Prix kWh */
+.kwh-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.kwh-label { font-size: 13px; font-weight: 600; flex: 1; }
+.kwh-value { font-size: 14px; font-weight: 600; color: #3b5bdb; }
+.kwh-unit { font-size: 13px; color: #888; }
+.kwh-input {
+  width: 110px;
+  padding: 6px 10px;
+  border: 1.5px solid var(--accent);
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+}
+
+/* Formulaire consommable */
+.cons-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+.cons-form-input, .cons-form-select {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+  width: 100%;
+  transition: border-color 0.15s;
+}
+.cons-form-input:focus, .cons-form-select:focus { border-color: var(--accent); }
+.cons-form-price-row { display: flex; align-items: center; gap: 8px; }
+.cons-form-price { flex: 1; }
+.cons-form-unit { font-size: 13px; color: #888; white-space: nowrap; }
+.cons-form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+
+/* Liste consommables */
+.cons-list { display: flex; flex-direction: column; gap: 6px; }
+.cons-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  transition: box-shadow 0.12s;
+}
+.cons-item:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+.cons-item-info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.cons-item-name { font-size: 14px; font-weight: 600; color: var(--text-content); }
+.cons-item-category { font-size: 11px; color: #888; }
+.cons-item-price { font-size: 13px; font-weight: 500; color: #3b5bdb; white-space: nowrap; }
+.cons-item-kwh-hint { font-size: 11px; color: #888; white-space: nowrap; }
+.cons-item-actions { display: flex; gap: 4px; }
+.btn-icon-sm {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 15px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  transition: background 0.1s;
+}
+.btn-icon-sm:hover { background: #f0f0f0; }
+.btn-danger-icon:hover { background: #fee2e2; }
+
+/* ── Section coût dans le projet ── */
+.cost-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.cost-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.cost-row-orphan { opacity: 0.5; font-style: italic; }
+.cost-row-info { flex: 1; display: flex; flex-direction: column; gap: 1px; }
+.cost-name { font-weight: 600; color: var(--text-content); }
+.cost-category { font-size: 11px; color: #888; }
+.cost-qty { color: #555; white-space: nowrap; min-width: 80px; text-align: right; }
+.cost-amount { font-weight: 600; color: #3b5bdb; white-space: nowrap; min-width: 70px; text-align: right; }
+.cost-total {
+  text-align: right;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-content);
+  padding: 10px 14px;
+  border-top: 2px solid var(--border);
+  margin-bottom: 14px;
+}
+.cost-add-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.cost-add-select {
+  flex: 1;
+  min-width: 200px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+}
+.cost-add-select:focus { border-color: var(--accent); }
+.cost-add-qty {
+  width: 90px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+}
+.cost-add-qty:focus { border-color: var(--accent); }
+.cost-add-unit { font-size: 12px; color: #888; }
+.cost-add-btn {
+  margin-top: 10px;
+  padding: 6px 16px;
+  background: none;
+  border: 1.5px dashed #bbb;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #888;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+.cost-add-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.cost-add-btn:disabled { opacity: 0.4; cursor: default; }
+
 /* ── Markdown ── */
 .markdown-body {
   background: white;
@@ -1258,4 +1473,183 @@ body {
 .markdown-body th {
   background: #f5f5f5;
   font-weight: 600;
+}
+
+/* ── Statut projet ── */
+.detail-title-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-badge {
+  padding: 4px 12px;
+  border-radius: 12px;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.status-badge:hover { opacity: 0.8; }
+
+.status-draft {
+  background: #fef3c7;
+  color: #92400e;
+}
+.status-done {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge-done {
+  background: #166534;
+  color: #dcfce7;
+}
+
+/* ── Sessions d'impression ── */
+.session-form {
+  background: #f8f9fa;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.session-form-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.session-form-row label {
+  width: 140px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #555;
+  flex-shrink: 0;
+}
+.session-form-row .cons-form-input,
+.session-form-row .cons-form-select,
+.session-form-row .cons-form-price-row {
+  flex: 1;
+}
+
+.session-form-hint {
+  font-size: 12px;
+  color: #888;
+  font-style: italic;
+}
+
+.session-form-cons-section {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.session-form-cons-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #555;
+}
+.session-form-cons-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.session-form-cons-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.session-form-cons-name { flex: 1; font-size: 13px; }
+.session-form-cons-qty { font-size: 12px; color: #666; }
+
+/* Session cards */
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.session-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.session-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.session-card-index {
+  font-size: 11px;
+  font-weight: 700;
+  color: #888;
+  width: 24px;
+  flex-shrink: 0;
+}
+.session-card-name {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-content);
+}
+.session-card-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.session-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.session-meta-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  background: #f0f0f5;
+  border-radius: 10px;
+  color: #555;
+}
+
+.session-cons-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.session-cons-chip {
+  font-size: 11px;
+  padding: 3px 8px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  color: #1e40af;
+}
+
+.session-card-cost {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: #555;
+  border-top: 1px solid #f0f0f0;
+  padding-top: 6px;
+}
+.session-card-total {
+  font-weight: 700;
+  color: var(--text-content);
 }
