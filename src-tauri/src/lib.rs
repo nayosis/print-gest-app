@@ -56,6 +56,7 @@ pub struct Project {
     pub quantity: u32,
     pub design_time_h: f64,
     pub design_rate: f64,
+    pub selling_price: f64,
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -68,10 +69,11 @@ struct Meta {
     quantity: u32,
     design_time_h: f64,
     design_rate: f64,
+    selling_price: f64,
 }
 
 fn read_meta(dir: &Path) -> Meta {
-    let empty = Meta { title: None, tags: Vec::new(), status: "draft".into(), sessions: Vec::new(), quantity: 1, design_time_h: 0.0, design_rate: 0.0 };
+    let empty = Meta { title: None, tags: Vec::new(), status: "draft".into(), sessions: Vec::new(), quantity: 1, design_time_h: 0.0, design_rate: 0.0, selling_price: 0.0 };
     let Ok(content) = fs::read_to_string(dir.join("meta.json")) else { return empty };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else { return empty };
     let title = v["title"].as_str().map(|s| s.to_string());
@@ -85,7 +87,8 @@ fn read_meta(dir: &Path) -> Meta {
     let quantity = v["quantity"].as_u64().unwrap_or(1).max(1) as u32;
     let design_time_h = v["design_time_h"].as_f64().unwrap_or(0.0).max(0.0);
     let design_rate = v["design_rate"].as_f64().unwrap_or(0.0).max(0.0);
-    Meta { title, tags, status, sessions, quantity, design_time_h, design_rate }
+    let selling_price = v["selling_price"].as_f64().unwrap_or(0.0).max(0.0);
+    Meta { title, tags, status, sessions, quantity, design_time_h, design_rate, selling_price }
 }
 
 fn to_camel_case(s: &str) -> String {
@@ -171,6 +174,7 @@ fn scan_project_dir(path: &Path) -> Project {
         quantity: meta.quantity,
         design_time_h: meta.design_time_h,
         design_rate: meta.design_rate,
+        selling_price: meta.selling_price,
     }
 }
 
@@ -424,6 +428,7 @@ fn save_project_sessions(
     quantity: u32,
     design_time_h: f64,
     design_rate: f64,
+    selling_price: f64,
 ) -> Result<Project, String> {
     let path = Path::new(&project_path);
     let mut meta = read_meta_json(path);
@@ -432,6 +437,7 @@ fn save_project_sessions(
     meta["quantity"] = serde_json::json!(quantity.max(1));
     meta["design_time_h"] = serde_json::json!(design_time_h.max(0.0));
     meta["design_rate"] = serde_json::json!(design_rate.max(0.0));
+    meta["selling_price"] = serde_json::json!(selling_price.max(0.0));
     fs::write(
         path.join("meta.json"),
         serde_json::to_string_pretty(&meta).unwrap(),

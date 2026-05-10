@@ -135,9 +135,10 @@ function App() {
   const [sessionConsPickId, setSessionConsPickId] = useState("");
   const [sessionConsPickQty, setSessionConsPickQty] = useState("");
 
-  // Conception (config tab)
+  // Tarification (config tab)
   const [designTimeInput, setDesignTimeInput] = useState("");
   const [designRateInput, setDesignRateInput] = useState("");
+  const [sellingPriceInput, setSellingPriceInput] = useState("");
 
   // Onglet panneau droit
   const [rightTab, setRightTab] = useState<"description" | "sessions" | "config" | "files">("description");
@@ -247,6 +248,7 @@ function App() {
     setRightTab("description");
     setDesignTimeInput(selected?.design_time_h ? selected.design_time_h.toString() : "");
     setDesignRateInput(selected?.design_rate ? selected.design_rate.toString() : "");
+    setSellingPriceInput(selected?.selling_price ? selected.selling_price.toString() : "");
   }, [selected?.path]);
 
   // ── Drag & Drop ──
@@ -483,7 +485,7 @@ function App() {
     sessions: PrintSession[],
     status: string,
     quantity: number,
-    opts?: { designTimeH?: number; designRate?: number },
+    opts?: { designTimeH?: number; designRate?: number; sellingPrice?: number },
   ) => {
     if (!selected) return;
     const updated = await invoke<Project>("save_project_sessions", {
@@ -493,16 +495,19 @@ function App() {
       quantity: Math.max(1, quantity),
       designTimeH: opts?.designTimeH ?? selected.design_time_h,
       designRate: opts?.designRate ?? selected.design_rate,
+      sellingPrice: opts?.sellingPrice ?? selected.selling_price,
     });
     setSelected(updated);
     setProjects((prev) => sortedInsert(prev, updated));
   };
 
-  const handleSaveDesign = () => {
+  const handleSavePricing = () => {
     if (!selected) return;
-    const h = Math.max(0, parseFloat(designTimeInput) || 0);
-    const rate = Math.max(0, parseFloat(designRateInput) || 0);
-    persistSessions(selected.sessions, selected.status, selected.quantity, { designTimeH: h, designRate: rate });
+    persistSessions(selected.sessions, selected.status, selected.quantity, {
+      designTimeH: Math.max(0, parseFloat(designTimeInput) || 0),
+      designRate: Math.max(0, parseFloat(designRateInput) || 0),
+      sellingPrice: Math.max(0, parseFloat(sellingPriceInput) || 0),
+    });
   };
 
   const handleChangeStatus = () => {
@@ -1077,79 +1082,106 @@ function App() {
               </div>
             </div>
 
-            {/* Corps deux colonnes */}
+            {/* Corps : récapitulatif en haut + onglets */}
             <div className="project-body">
 
-              {/* Colonne gauche : résumé coûts */}
-              <div className="project-files-panel">
-                <div className="cost-summary">
+              {/* Barre récapitulative */}
+              <div className="summary-bar">
+                <div className="summary-sessions-scroll">
                   {selected.sessions.length === 0 ? (
-                    <p className="empty-files" style={{ padding: "12px 0" }}>Aucune session — pas de coût calculé.</p>
-                  ) : (
-                    <>
-                      {selected.sessions.map((s, idx) => {
-                        const pr = printers.find((p) => p.id === s.printer_id);
-                        const { mat, elec, labor } = sessionCost(s);
-                        const total = mat + elec + labor;
-                        const b64 = thumbnails[s.file_3mf];
-                        return (
-                          <div key={s.id} className="cost-summary-session">
-                            {b64 && <img src={`data:image/png;base64,${b64}`} className="cost-summary-thumb" alt={s.file_3mf} />}
-                            <div className="cost-summary-session-title">
-                              <span className="cost-summary-index">#{idx + 1}</span>
-                              <span className="cost-summary-name">{s.name || s.file_3mf || "Session"}</span>
+                    <span className="summary-empty">Aucune session d'impression configurée</span>
+                  ) : selected.sessions.map((s, idx) => {
+                    const { mat, elec, labor } = sessionCost(s);
+                    const total = mat + elec + labor;
+                    const b64 = thumbnails[s.file_3mf];
+                    return (
+                      <div key={s.id} className="summary-mini-card">
+                        {b64
+                          ? <img src={`data:image/png;base64,${b64}`} className="summary-mini-thumb" alt={s.file_3mf} />
+                          : <div className="summary-mini-thumb summary-mini-thumb-ph">📦</div>
+                        }
+                        <div className="summary-mini-info">
+                          <span className="summary-mini-name">
+                            <span className="cost-summary-index">#{idx + 1}</span>
+                            {" "}{s.name || s.file_3mf || "Session"}
+                          </span>
+                          {total > 0 && <span className="summary-mini-cost">{total.toFixed(2)} €</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="summary-totals-panel">
+                  {(() => {
+                    const grand = selected.sessions.reduce((acc, s) => {
+                      const { mat, elec, labor } = sessionCost(s);
+                      return { mat: acc.mat + mat, elec: acc.elec + elec, labor: acc.labor + labor };
+                    }, { mat: 0, elec: 0, labor: 0 });
+                    const prodTotal = grand.mat + grand.elec + grand.labor;
+                    const costPerUnit = selected.quantity > 0 ? prodTotal / selected.quantity : 0;
+                    const designCost = selected.design_time_h * selected.design_rate;
+                    const hasSelling = selected.selling_price > 0;
+                    const marginPerUnit = hasSelling ? selected.selling_price - costPerUnit : null;
+                    const breakEven = designCost > 0 && marginPerUnit !== null && marginPerUnit > 0
+                      ? Math.ceil(designCost / marginPerUnit) : null;
+                    return (
+                      <>
+                        {prodTotal > 0 ? (
+                          <>
+                            <div className="summary-total-line">
+                              <span>Production</span>
+                              <span className="summary-val-blue">{prodTotal.toFixed(2)} €</span>
                             </div>
-                            {pr && <div className="cost-summary-meta">🖨 {pr.name} · ⏱ {s.print_time_h} h</div>}
-                            <div className="cost-summary-lines">
-                              {mat > 0 && <div className="cost-summary-line"><span>Matière</span><span>{mat.toFixed(2)} €</span></div>}
-                              {elec > 0 && <div className="cost-summary-line"><span>Électricité</span><span>{elec.toFixed(3)} €</span></div>}
-                              {labor > 0 && <div className="cost-summary-line"><span>Main d'œuvre</span><span>{labor.toFixed(2)} €</span></div>}
-                              {total > 0
-                                ? <div className="cost-summary-line cost-summary-subtotal"><span>Sous-total</span><span>{total.toFixed(2)} €</span></div>
-                                : <div className="cost-summary-line"><span style={{ color: "#aaa" }}>Pas de coût configuré</span></div>}
-                            </div>
-                          </div>
-                        );
-                      })}
-                      {(() => {
-                        const grand = selected.sessions.reduce((acc, s) => {
-                          const { mat, elec, labor } = sessionCost(s);
-                          return { mat: acc.mat + mat, elec: acc.elec + elec, labor: acc.labor + labor };
-                        }, { mat: 0, elec: 0, labor: 0 });
-                        const designCost = selected.design_time_h * selected.design_rate;
-                        const total = grand.mat + grand.elec + grand.labor + designCost;
-                        return (
-                          <div className="cost-summary-total-block">
-                            {grand.labor > 0 && (
-                              <div className="cost-summary-line" style={{ fontSize: 12 }}>
-                                <span>MO sessions</span><span>{grand.labor.toFixed(2)} €</span>
-                              </div>
-                            )}
-                            {designCost > 0 && (
-                              <div className="cost-summary-line" style={{ fontSize: 12 }}>
-                                <span>Conception ({selected.design_time_h} h)</span>
-                                <span>{designCost.toFixed(2)} €</span>
-                              </div>
-                            )}
-                            <div className="cost-summary-total-row">
-                              <span>Total projet</span>
-                              <span className="cost-summary-total-val">{total.toFixed(2)} €</span>
-                            </div>
-                            {selected.quantity > 1 && total > 0 && (
-                              <div className="cost-summary-unit-row">
+                            {selected.quantity > 1 && (
+                              <div className="summary-total-line summary-line-muted">
                                 <span>Par objet (×{selected.quantity})</span>
-                                <span className="cost-summary-unit-val">{(total / selected.quantity).toFixed(2)} €</span>
+                                <span>{costPerUnit.toFixed(2)} €</span>
                               </div>
                             )}
-                          </div>
-                        );
-                      })()}
-                    </>
-                  )}
+                          </>
+                        ) : (
+                          <span className="summary-empty">Pas de coût configuré</span>
+                        )}
+                        {hasSelling && (
+                          <>
+                            <div className="summary-divider" />
+                            <div className="summary-total-line">
+                              <span>Prix de vente</span>
+                              <span className="summary-val-blue">{selected.selling_price.toFixed(2)} €</span>
+                            </div>
+                            {prodTotal > 0 && marginPerUnit !== null && (
+                              <div className={`summary-total-line ${marginPerUnit >= 0 ? "summary-val-green" : "summary-val-red"}`}>
+                                <span>Marge/objet</span>
+                                <span>{marginPerUnit >= 0 ? "+" : ""}{marginPerUnit.toFixed(2)} €</span>
+                              </div>
+                            )}
+                          </>
+                        )}
+                        {designCost > 0 && (
+                          <>
+                            <div className="summary-divider" />
+                            <div className="summary-total-line summary-line-muted">
+                              <span>Conception ({selected.design_time_h} h)</span>
+                              <span>{designCost.toFixed(2)} €</span>
+                            </div>
+                            {breakEven !== null && (
+                              <div className="summary-breakeven">
+                                Rentable en <strong>{breakEven}</strong> vente{breakEven > 1 ? "s" : ""}
+                              </div>
+                            )}
+                            {marginPerUnit !== null && marginPerUnit <= 0 && (
+                              <div className="summary-breakeven summary-breakeven-warn">Marge insuffisante</div>
+                            )}
+                          </>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
 
-              {/* Colonne droite : onglets */}
+              {/* Panneau principal : onglets */}
               <div className="project-main-panel">
 
                 {editorOpen ? (
@@ -1413,8 +1445,23 @@ function App() {
                             </div>
                           </section>
                           <section className="detail-section">
-                            <h2>Conception / Design</h2>
+                            <h2>Tarification</h2>
                             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                              <div className="config-row">
+                                <div className="config-row-info">
+                                  <span className="config-row-label">Prix de vente</span>
+                                  <span className="config-row-hint">Prix de vente d'un objet au client</span>
+                                </div>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                  <input type="number" min="0" step="0.5" className="cost-add-qty" placeholder="0"
+                                    value={sellingPriceInput}
+                                    onChange={(e) => setSellingPriceInput(e.target.value)}
+                                    onBlur={handleSavePricing}
+                                    onKeyDown={(e) => { if (e.key === "Enter") handleSavePricing(); }} />
+                                  <span className="cost-add-unit">€</span>
+                                </div>
+                              </div>
+                              <div className="summary-divider" style={{ margin: "4px 0" }} />
                               <div className="config-row">
                                 <div className="config-row-info">
                                   <span className="config-row-label">Temps de conception</span>
@@ -1424,30 +1471,25 @@ function App() {
                                   <input type="number" min="0" step="0.5" className="cost-add-qty" placeholder="0"
                                     value={designTimeInput}
                                     onChange={(e) => setDesignTimeInput(e.target.value)}
-                                    onBlur={handleSaveDesign}
-                                    onKeyDown={(e) => { if (e.key === "Enter") handleSaveDesign(); }} />
+                                    onBlur={handleSavePricing}
+                                    onKeyDown={(e) => { if (e.key === "Enter") handleSavePricing(); }} />
                                   <span className="cost-add-unit">h</span>
                                 </div>
                               </div>
                               <div className="config-row">
                                 <div className="config-row-info">
-                                  <span className="config-row-label">Taux horaire</span>
-                                  <span className="config-row-hint">Coût de votre heure de travail</span>
+                                  <span className="config-row-label">Taux horaire conception</span>
+                                  <span className="config-row-hint">Coût de votre heure de design</span>
                                 </div>
                                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                                   <input type="number" min="0" step="1" className="cost-add-qty" placeholder="0"
                                     value={designRateInput}
                                     onChange={(e) => setDesignRateInput(e.target.value)}
-                                    onBlur={handleSaveDesign}
-                                    onKeyDown={(e) => { if (e.key === "Enter") handleSaveDesign(); }} />
+                                    onBlur={handleSavePricing}
+                                    onKeyDown={(e) => { if (e.key === "Enter") handleSavePricing(); }} />
                                   <span className="cost-add-unit">€/h</span>
                                 </div>
                               </div>
-                              {parseFloat(designTimeInput) > 0 && parseFloat(designRateInput) > 0 && (
-                                <div style={{ fontSize: 12, color: "#3b5bdb", textAlign: "right" }}>
-                                  Coût conception : {(parseFloat(designTimeInput) * parseFloat(designRateInput)).toFixed(2)} €
-                                </div>
-                              )}
                             </div>
                           </section>
                         </div>

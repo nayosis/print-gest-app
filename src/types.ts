@@ -45,6 +45,7 @@ export interface Project {
   quantity: number;
   design_time_h: number;
   design_rate: number;
+  selling_price: number;
 }
 
 export interface PrintInfo {
