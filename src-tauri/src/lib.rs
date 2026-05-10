@@ -34,6 +34,10 @@ pub struct PrintSession {
     pub printer_id: String,
     pub print_time_h: f64,
     pub consumables: Vec<SessionConsumable>,
+    #[serde(default)]
+    pub labor_time_h: f64,
+    #[serde(default)]
+    pub labor_rate: f64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -50,6 +54,8 @@ pub struct Project {
     pub status: String,
     pub sessions: Vec<PrintSession>,
     pub quantity: u32,
+    pub design_time_h: f64,
+    pub design_rate: f64,
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -60,10 +66,12 @@ struct Meta {
     status: String,
     sessions: Vec<PrintSession>,
     quantity: u32,
+    design_time_h: f64,
+    design_rate: f64,
 }
 
 fn read_meta(dir: &Path) -> Meta {
-    let empty = Meta { title: None, tags: Vec::new(), status: "draft".into(), sessions: Vec::new(), quantity: 1 };
+    let empty = Meta { title: None, tags: Vec::new(), status: "draft".into(), sessions: Vec::new(), quantity: 1, design_time_h: 0.0, design_rate: 0.0 };
     let Ok(content) = fs::read_to_string(dir.join("meta.json")) else { return empty };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else { return empty };
     let title = v["title"].as_str().map(|s| s.to_string());
@@ -75,7 +83,9 @@ fn read_meta(dir: &Path) -> Meta {
         .map(|arr| arr.iter().filter_map(|i| serde_json::from_value::<PrintSession>(i.clone()).ok()).collect())
         .unwrap_or_default();
     let quantity = v["quantity"].as_u64().unwrap_or(1).max(1) as u32;
-    Meta { title, tags, status, sessions, quantity }
+    let design_time_h = v["design_time_h"].as_f64().unwrap_or(0.0).max(0.0);
+    let design_rate = v["design_rate"].as_f64().unwrap_or(0.0).max(0.0);
+    Meta { title, tags, status, sessions, quantity, design_time_h, design_rate }
 }
 
 fn to_camel_case(s: &str) -> String {
@@ -159,6 +169,8 @@ fn scan_project_dir(path: &Path) -> Project {
         status: meta.status,
         sessions: meta.sessions,
         quantity: meta.quantity,
+        design_time_h: meta.design_time_h,
+        design_rate: meta.design_rate,
     }
 }
 
@@ -410,12 +422,16 @@ fn save_project_sessions(
     sessions: Vec<PrintSession>,
     status: String,
     quantity: u32,
+    design_time_h: f64,
+    design_rate: f64,
 ) -> Result<Project, String> {
     let path = Path::new(&project_path);
     let mut meta = read_meta_json(path);
     meta["sessions"] = serde_json::to_value(&sessions).map_err(|e| e.to_string())?;
     meta["status"] = serde_json::json!(status);
     meta["quantity"] = serde_json::json!(quantity.max(1));
+    meta["design_time_h"] = serde_json::json!(design_time_h.max(0.0));
+    meta["design_rate"] = serde_json::json!(design_rate.max(0.0));
     fs::write(
         path.join("meta.json"),
         serde_json::to_string_pretty(&meta).unwrap(),

@@ -26,6 +26,8 @@ export interface PrintSession {
   printer_id: string;
   print_time_h: number;
   consumables: SessionConsumable[];
+  labor_time_h: number;
+  labor_rate: number;
 }
 
 export interface Project {
@@ -41,6 +43,8 @@ export interface Project {
   status: string;
   sessions: PrintSession[];
   quantity: number;
+  design_time_h: number;
+  design_rate: number;
 }
 
 export interface PrintInfo {

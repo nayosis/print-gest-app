@@ -27,6 +27,8 @@ interface SessionForm {
   printer_id: string;
   print_time_h: string;
   consumables: SessionConsumable[];
+  labor_time_h: string;
+  labor_rate: string;
 }
 
 function calcCost(c: Consumable, qty: number): number {
@@ -132,6 +134,10 @@ function App() {
   const [sessionForm, setSessionForm] = useState<SessionForm | null>(null);
   const [sessionConsPickId, setSessionConsPickId] = useState("");
   const [sessionConsPickQty, setSessionConsPickQty] = useState("");
+
+  // Conception (config tab)
+  const [designTimeInput, setDesignTimeInput] = useState("");
+  const [designRateInput, setDesignRateInput] = useState("");
 
   // Onglet panneau droit
   const [rightTab, setRightTab] = useState<"description" | "sessions" | "config" | "files">("description");
@@ -239,6 +245,8 @@ function App() {
     setSessionConsPickId("");
     setSessionConsPickQty("");
     setRightTab("description");
+    setDesignTimeInput(selected?.design_time_h ? selected.design_time_h.toString() : "");
+    setDesignRateInput(selected?.design_rate ? selected.design_rate.toString() : "");
   }, [selected?.path]);
 
   // ── Drag & Drop ──
@@ -471,16 +479,30 @@ function App() {
 
   // ── Sessions d'impression ──
 
-  const persistSessions = async (sessions: PrintSession[], status: string, quantity: number) => {
+  const persistSessions = async (
+    sessions: PrintSession[],
+    status: string,
+    quantity: number,
+    opts?: { designTimeH?: number; designRate?: number },
+  ) => {
     if (!selected) return;
     const updated = await invoke<Project>("save_project_sessions", {
       projectPath: selected.path,
       sessions,
       status,
       quantity: Math.max(1, quantity),
+      designTimeH: opts?.designTimeH ?? selected.design_time_h,
+      designRate: opts?.designRate ?? selected.design_rate,
     });
     setSelected(updated);
     setProjects((prev) => sortedInsert(prev, updated));
+  };
+
+  const handleSaveDesign = () => {
+    if (!selected) return;
+    const h = Math.max(0, parseFloat(designTimeInput) || 0);
+    const rate = Math.max(0, parseFloat(designRateInput) || 0);
+    persistSessions(selected.sessions, selected.status, selected.quantity, { designTimeH: h, designRate: rate });
   };
 
   const handleChangeStatus = () => {
@@ -502,6 +524,8 @@ function App() {
       printer_id: printers[0]?.id ?? "",
       print_time_h: "",
       consumables: [],
+      labor_time_h: "",
+      labor_rate: "",
     });
     setSessionConsPickId("");
     setSessionConsPickQty("");
@@ -515,6 +539,8 @@ function App() {
       printer_id: s.printer_id,
       print_time_h: s.print_time_h.toString(),
       consumables: [...s.consumables],
+      labor_time_h: s.labor_time_h > 0 ? s.labor_time_h.toString() : "",
+      labor_rate: s.labor_rate > 0 ? s.labor_rate.toString() : "",
     });
     setSessionConsPickId("");
     setSessionConsPickQty("");
@@ -554,6 +580,8 @@ function App() {
       printer_id: sessionForm.printer_id,
       print_time_h: h,
       consumables: sessionForm.consumables,
+      labor_time_h: Math.max(0, parseFloat(sessionForm.labor_time_h) || 0),
+      labor_rate: Math.max(0, parseFloat(sessionForm.labor_rate) || 0),
     };
     const sessions = sessionForm.id
       ? selected.sessions.map((s) => (s.id === session.id ? session : s))
@@ -625,14 +653,15 @@ function App() {
     : 0;
 
   // ── Calcul coût total d'une session ──
-  const sessionCost = (s: PrintSession): { mat: number; elec: number } => {
+  const sessionCost = (s: PrintSession): { mat: number; elec: number; labor: number } => {
     const mat = s.consumables.reduce((sum, sc) => {
       const c = consumables.find((x) => x.id === sc.consumable_id);
       return c ? sum + calcCost(c, sc.quantity) : sum;
     }, 0);
     const pr = printers.find((p) => p.id === s.printer_id);
     const elec = pr ? printerCost(pr, s.print_time_h, electricityPrice) : 0;
-    return { mat, elec };
+    const labor = (s.labor_time_h ?? 0) * (s.labor_rate ?? 0);
+    return { mat, elec, labor };
   };
 
   return (
@@ -1060,8 +1089,8 @@ function App() {
                     <>
                       {selected.sessions.map((s, idx) => {
                         const pr = printers.find((p) => p.id === s.printer_id);
-                        const { mat, elec } = sessionCost(s);
-                        const total = mat + elec;
+                        const { mat, elec, labor } = sessionCost(s);
+                        const total = mat + elec + labor;
                         const b64 = thumbnails[s.file_3mf];
                         return (
                           <div key={s.id} className="cost-summary-session">
@@ -1074,6 +1103,7 @@ function App() {
                             <div className="cost-summary-lines">
                               {mat > 0 && <div className="cost-summary-line"><span>Matière</span><span>{mat.toFixed(2)} €</span></div>}
                               {elec > 0 && <div className="cost-summary-line"><span>Électricité</span><span>{elec.toFixed(3)} €</span></div>}
+                              {labor > 0 && <div className="cost-summary-line"><span>Main d'œuvre</span><span>{labor.toFixed(2)} €</span></div>}
                               {total > 0
                                 ? <div className="cost-summary-line cost-summary-subtotal"><span>Sous-total</span><span>{total.toFixed(2)} €</span></div>
                                 : <div className="cost-summary-line"><span style={{ color: "#aaa" }}>Pas de coût configuré</span></div>}
@@ -1083,12 +1113,24 @@ function App() {
                       })}
                       {(() => {
                         const grand = selected.sessions.reduce((acc, s) => {
-                          const { mat, elec } = sessionCost(s);
-                          return { mat: acc.mat + mat, elec: acc.elec + elec };
-                        }, { mat: 0, elec: 0 });
-                        const total = grand.mat + grand.elec;
+                          const { mat, elec, labor } = sessionCost(s);
+                          return { mat: acc.mat + mat, elec: acc.elec + elec, labor: acc.labor + labor };
+                        }, { mat: 0, elec: 0, labor: 0 });
+                        const designCost = selected.design_time_h * selected.design_rate;
+                        const total = grand.mat + grand.elec + grand.labor + designCost;
                         return (
                           <div className="cost-summary-total-block">
+                            {grand.labor > 0 && (
+                              <div className="cost-summary-line" style={{ fontSize: 12 }}>
+                                <span>MO sessions</span><span>{grand.labor.toFixed(2)} €</span>
+                              </div>
+                            )}
+                            {designCost > 0 && (
+                              <div className="cost-summary-line" style={{ fontSize: 12 }}>
+                                <span>Conception ({selected.design_time_h} h)</span>
+                                <span>{designCost.toFixed(2)} €</span>
+                              </div>
+                            )}
                             <div className="cost-summary-total-row">
                               <span>Total projet</span>
                               <span className="cost-summary-total-val">{total.toFixed(2)} €</span>
@@ -1262,6 +1304,32 @@ function App() {
                                   </div>
                                 )}
                               </div>
+                              <div className="session-form-cons-section">
+                                <span className="session-form-cons-label">Main d'œuvre</span>
+                                <div className="session-form-row">
+                                  <label>Temps</label>
+                                  <div className="cons-form-price-row">
+                                    <input className="cons-form-input cons-form-price" type="number" min="0" step="0.5" placeholder="0"
+                                      value={sessionForm.labor_time_h}
+                                      onChange={(e) => setSessionForm({ ...sessionForm, labor_time_h: e.target.value })} />
+                                    <span className="cons-form-unit">h</span>
+                                  </div>
+                                </div>
+                                <div className="session-form-row">
+                                  <label>Taux horaire</label>
+                                  <div className="cons-form-price-row">
+                                    <input className="cons-form-input cons-form-price" type="number" min="0" step="1" placeholder="0"
+                                      value={sessionForm.labor_rate}
+                                      onChange={(e) => setSessionForm({ ...sessionForm, labor_rate: e.target.value })} />
+                                    <span className="cons-form-unit">€/h</span>
+                                  </div>
+                                </div>
+                                {parseFloat(sessionForm.labor_time_h) > 0 && parseFloat(sessionForm.labor_rate) > 0 && (
+                                  <div className="session-form-hint">
+                                    Coût MO : {(parseFloat(sessionForm.labor_time_h) * parseFloat(sessionForm.labor_rate)).toFixed(2)} €
+                                  </div>
+                                )}
+                              </div>
                               <div className="cons-form-actions">
                                 <button className="btn-cancel" onClick={() => setSessionForm(null)}>Annuler</button>
                                 <button className="btn-save" onClick={handleSaveSession}
@@ -1278,8 +1346,7 @@ function App() {
                             <div className="session-list">
                               {selected.sessions.map((s, idx) => {
                                 const pr = printers.find((p) => p.id === s.printer_id);
-                                const { mat, elec } = sessionCost(s);
-                                const total = mat + elec;
+                                const { mat, elec, labor } = sessionCost(s);
                                 const thumb = thumbnails[s.file_3mf];
                                 return (
                                   <div key={s.id} className="session-card">
@@ -1312,11 +1379,12 @@ function App() {
                                         })}
                                       </div>
                                     )}
-                                    {(mat > 0 || elec > 0) && (
+                                    {(mat > 0 || elec > 0 || labor > 0) && (
                                       <div className="session-card-cost">
                                         {mat > 0 && <span>Matière : {mat.toFixed(2)} €</span>}
                                         {elec > 0 && <span>Électricité : {elec.toFixed(3)} €</span>}
-                                        <span className="session-card-total">Total : {total.toFixed(2)} €</span>
+                                        {labor > 0 && <span>MO : {labor.toFixed(2)} €</span>}
+                                        <span className="session-card-total">Total : {(mat + elec + labor).toFixed(2)} €</span>
                                       </div>
                                     )}
                                   </div>
@@ -1342,6 +1410,44 @@ function App() {
                                 <span className="qty-val">{selected.quantity}</span>
                                 <button className="qty-btn" onClick={() => handleChangeQuantity(1)}>+</button>
                               </div>
+                            </div>
+                          </section>
+                          <section className="detail-section">
+                            <h2>Conception / Design</h2>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                              <div className="config-row">
+                                <div className="config-row-info">
+                                  <span className="config-row-label">Temps de conception</span>
+                                  <span className="config-row-hint">Heures de design (Fusion 360, modélisation…)</span>
+                                </div>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                  <input type="number" min="0" step="0.5" className="cost-add-qty" placeholder="0"
+                                    value={designTimeInput}
+                                    onChange={(e) => setDesignTimeInput(e.target.value)}
+                                    onBlur={handleSaveDesign}
+                                    onKeyDown={(e) => { if (e.key === "Enter") handleSaveDesign(); }} />
+                                  <span className="cost-add-unit">h</span>
+                                </div>
+                              </div>
+                              <div className="config-row">
+                                <div className="config-row-info">
+                                  <span className="config-row-label">Taux horaire</span>
+                                  <span className="config-row-hint">Coût de votre heure de travail</span>
+                                </div>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                  <input type="number" min="0" step="1" className="cost-add-qty" placeholder="0"
+                                    value={designRateInput}
+                                    onChange={(e) => setDesignRateInput(e.target.value)}
+                                    onBlur={handleSaveDesign}
+                                    onKeyDown={(e) => { if (e.key === "Enter") handleSaveDesign(); }} />
+                                  <span className="cost-add-unit">€/h</span>
+                                </div>
+                              </div>
+                              {parseFloat(designTimeInput) > 0 && parseFloat(designRateInput) > 0 && (
+                                <div style={{ fontSize: 12, color: "#3b5bdb", textAlign: "right" }}>
+                                  Coût conception : {(parseFloat(designTimeInput) * parseFloat(designRateInput)).toFixed(2)} €
+                                </div>
+                              )}
                             </div>
                           </section>
                         </div>
