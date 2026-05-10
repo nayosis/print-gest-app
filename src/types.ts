@@ -40,6 +40,7 @@ export interface Project {
   markdown_content: string | null;
   status: string;
   sessions: PrintSession[];
+  quantity: number;
 }
 
 export interface PrintInfo {

@@ -133,6 +133,9 @@ function App() {
   const [sessionConsPickId, setSessionConsPickId] = useState("");
   const [sessionConsPickQty, setSessionConsPickQty] = useState("");
 
+  // Onglet panneau gauche
+  const [leftTab, setLeftTab] = useState<"cost" | "files">("cost");
+
   const [videoModal, setVideoModal] = useState<{ src: string; name: string } | null>(null);
 
   const [contextMenu, setContextMenu] = useState<{
@@ -235,6 +238,7 @@ function App() {
     setSessionForm(null);
     setSessionConsPickId("");
     setSessionConsPickQty("");
+    setLeftTab("cost");
   }, [selected?.path]);
 
   // ── Drag & Drop ──
@@ -467,12 +471,13 @@ function App() {
 
   // ── Sessions d'impression ──
 
-  const persistSessions = async (sessions: PrintSession[], status: string) => {
+  const persistSessions = async (sessions: PrintSession[], status: string, quantity: number) => {
     if (!selected) return;
     const updated = await invoke<Project>("save_project_sessions", {
       projectPath: selected.path,
       sessions,
       status,
+      quantity: Math.max(1, quantity),
     });
     setSelected(updated);
     setProjects((prev) => sortedInsert(prev, updated));
@@ -481,7 +486,12 @@ function App() {
   const handleChangeStatus = () => {
     if (!selected) return;
     const newStatus = selected.status === "done" ? "draft" : "done";
-    persistSessions(selected.sessions, newStatus);
+    persistSessions(selected.sessions, newStatus, selected.quantity);
+  };
+
+  const handleChangeQuantity = (delta: number) => {
+    if (!selected) return;
+    persistSessions(selected.sessions, selected.status, selected.quantity + delta);
   };
 
   const openNewSession = () => {
@@ -548,13 +558,13 @@ function App() {
     const sessions = sessionForm.id
       ? selected.sessions.map((s) => (s.id === session.id ? session : s))
       : [...selected.sessions, session];
-    await persistSessions(sessions, selected.status);
+    await persistSessions(sessions, selected.status, selected.quantity);
     setSessionForm(null);
   };
 
   const handleDeleteSession = async (id: string) => {
     if (!selected) return;
-    await persistSessions(selected.sessions.filter((s) => s.id !== id), selected.status);
+    await persistSessions(selected.sessions.filter((s) => s.id !== id), selected.status, selected.quantity);
   };
 
   // ── Archivage & outils ──
@@ -1044,502 +1054,448 @@ function App() {
               </div>
             )}
 
-            {/* En-tête */}
-            {renaming ? (
-              <div className="rename-form">
-                <input
-                  className="rename-input"
-                  value={renameValue}
-                  onChange={(e) => {
-                    setRenameValue(e.target.value);
-                    setRenameError(null);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleRename();
-                    if (e.key === "Escape") setRenaming(false);
-                  }}
-                  placeholder="Nom du projet"
-                  autoFocus
-                />
-                <div className="rename-hint">
-                  Dossier :{" "}
-                  <code>
-                    {renameValue.trim()
-                      ? toCamelCasePreview(renameValue)
-                      : "…"}
-                  </code>
-                </div>
-                {renameError && (
-                  <p className="rename-error">{renameError}</p>
-                )}
-                <div className="rename-actions">
-                  <button
-                    className="btn-cancel"
-                    onClick={() => setRenaming(false)}
-                    disabled={renameLoading}
-                  >
-                    Annuler
-                  </button>
-                  <button
-                    className="btn-save"
-                    onClick={handleRename}
-                    disabled={renameLoading || !renameValue.trim()}
-                  >
-                    {renameLoading ? "…" : "Renommer"}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="detail-title-row">
-                <div>
-                  <h1 className="detail-title">{displayName(selected)}</h1>
-                  <span className="folder-badge">📁 {selected.name}</span>
-                </div>
-                <div className="detail-title-actions">
-                  <button
-                    className={`status-badge ${selected.status === "done" ? "status-done" : "status-draft"}`}
-                    onClick={handleChangeStatus}
-                    title="Cliquer pour changer le statut"
-                  >
-                    {selected.status === "done" ? "✓ Terminé" : "✏ Brouillon"}
-                  </button>
-                  <button
-                    className="btn-rename"
-                    onClick={() => {
-                      setRenameValue(displayName(selected));
-                      setRenameError(null);
-                      setRenaming(true);
+            {/* ── Header pleine largeur ── */}
+            <div className="project-header">
+              {renaming ? (
+                <div className="rename-form">
+                  <input
+                    className="rename-input"
+                    value={renameValue}
+                    onChange={(e) => { setRenameValue(e.target.value); setRenameError(null); }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleRename();
+                      if (e.key === "Escape") setRenaming(false);
                     }}
-                    title="Renommer le projet"
-                  >
-                    ✏️ Renommer
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Tags */}
-            <div className="tags-row">
-              {selected.tags.map((tag) => {
-                const { bg, text } = tagColor(tag);
-                return (
-                  <span
-                    key={tag}
-                    className="tag-chip"
-                    style={{ background: bg, color: text }}
-                    onClick={() => setActiveTagFilter(activeTagFilter === tag ? null : tag)}
-                    title="Cliquer pour filtrer"
-                  >
-                    {tag}
-                    <button
-                      className="tag-remove"
-                      style={{ color: text }}
-                      onClick={(e) => { e.stopPropagation(); handleRemoveTag(tag); }}
-                      title="Supprimer ce tag"
-                    >
-                      ×
+                    placeholder="Nom du projet"
+                    autoFocus
+                  />
+                  <div className="rename-hint">
+                    Dossier : <code>{renameValue.trim() ? toCamelCasePreview(renameValue) : "…"}</code>
+                  </div>
+                  {renameError && <p className="rename-error">{renameError}</p>}
+                  <div className="rename-actions">
+                    <button className="btn-cancel" onClick={() => setRenaming(false)} disabled={renameLoading}>Annuler</button>
+                    <button className="btn-save" onClick={handleRename} disabled={renameLoading || !renameValue.trim()}>
+                      {renameLoading ? "…" : "Renommer"}
                     </button>
-                  </span>
-                );
-              })}
-
-              {addingTag ? (
-                <input
-                  className="tag-input"
-                  value={tagInput}
-                  onChange={(e) => setTagInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleAddTag();
-                    if (e.key === "Escape") { setAddingTag(false); setTagInput(""); }
-                  }}
-                  onBlur={handleAddTag}
-                  placeholder="Nouveau tag…"
-                  autoFocus
-                  maxLength={32}
-                />
+                  </div>
+                </div>
               ) : (
-                <button
-                  className="tag-add-btn"
-                  onClick={() => setAddingTag(true)}
-                  title="Ajouter un tag"
-                >
-                  + Tag
-                </button>
+                <div className="detail-title-row">
+                  <div>
+                    <h1 className="detail-title">{displayName(selected)}</h1>
+                    <span className="folder-badge">📁 {selected.name}</span>
+                  </div>
+                  <div className="detail-title-actions">
+                    <button
+                      className={`status-badge ${selected.status === "done" ? "status-done" : "status-draft"}`}
+                      onClick={handleChangeStatus}
+                      title="Cliquer pour changer le statut"
+                    >
+                      {selected.status === "done" ? "✓ Terminé" : "✏ Brouillon"}
+                    </button>
+                    <button className="btn-rename" onClick={() => { setRenameValue(displayName(selected)); setRenameError(null); setRenaming(true); }}>
+                      ✏️ Renommer
+                    </button>
+                  </div>
+                </div>
               )}
+
+              <div className="tags-row">
+                {selected.tags.map((tag) => {
+                  const { bg, text } = tagColor(tag);
+                  return (
+                    <span key={tag} className="tag-chip" style={{ background: bg, color: text }}
+                      onClick={() => setActiveTagFilter(activeTagFilter === tag ? null : tag)} title="Cliquer pour filtrer">
+                      {tag}
+                      <button className="tag-remove" style={{ color: text }}
+                        onClick={(e) => { e.stopPropagation(); handleRemoveTag(tag); }} title="Supprimer ce tag">×</button>
+                    </span>
+                  );
+                })}
+                {addingTag ? (
+                  <input className="tag-input" value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") handleAddTag(); if (e.key === "Escape") { setAddingTag(false); setTagInput(""); } }}
+                    onBlur={handleAddTag} placeholder="Nouveau tag…" autoFocus maxLength={32} />
+                ) : (
+                  <button className="tag-add-btn" onClick={() => setAddingTag(true)} title="Ajouter un tag">+ Tag</button>
+                )}
+              </div>
             </div>
 
-            {/* Fichiers d'impression */}
-            {(selected.files_3mf.length > 0 || selected.stl_files.length > 0) && (
-              <section className="detail-section">
-                <h2>Fichiers d'impression</h2>
-                <div className="thumb-grid">
-                  {selected.files_3mf.map((file) => {
-                    const b64 = thumbnails[file];
-                    const isLoading = !(file in thumbnails);
-                    const info = printInfoMap[file];
-                    const hasInfo = info && (info.print_time !== null || info.weight_g !== null);
-                    return (
-                      <div
-                        key={file}
-                        className="thumb-card"
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          setContextMenu({ x: e.clientX, y: e.clientY, filePath: `${selected.path}\\${file}` });
-                        }}
-                      >
-                        <div className="thumb-img-wrap">
-                          {isLoading ? (
-                            <div className="thumb-placeholder loading">⏳</div>
-                          ) : b64 ? (
-                            <img src={`data:image/png;base64,${b64}`} alt={file} className="thumb-img" />
-                          ) : (
-                            <div className="thumb-placeholder">📦</div>
-                          )}
-                        </div>
-                        <span className="thumb-type-badge">3MF</span>
-                        <span className="thumb-label" title={file}>{file}</span>
-                        {hasInfo && (
-                          <div className="thumb-print-info">
-                            {info.print_time && (
-                              <span className="thumb-print-stat">⏱ {info.print_time}</span>
-                            )}
-                            {info.weight_g !== null && (
-                              <span className="thumb-print-stat">⚖ {info.weight_g!.toFixed(1)} g</span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                  {selected.stl_files.map((file) => {
-                    const data = stlData[file];
-                    const isLoading = !(file in stlData);
-                    return (
-                      <div
-                        key={file}
-                        className="thumb-card"
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          setContextMenu({ x: e.clientX, y: e.clientY, filePath: `${selected.path}\\${file}` });
-                        }}
-                      >
-                        <div className="thumb-img-wrap">
-                          {isLoading ? (
-                            <div className="thumb-placeholder loading">⏳</div>
-                          ) : data ? (
-                            <StlViewer base64={data} />
-                          ) : (
-                            <div className="thumb-placeholder">📐</div>
-                          )}
-                        </div>
-                        <span className="thumb-type-badge thumb-type-stl">STL</span>
-                        <span className="thumb-label" title={file}>{file}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
+            {/* ── Corps deux colonnes ── */}
+            <div className="project-body">
 
-            {/* Fichiers F3D */}
-            {selected.f3d_files.length > 0 && (
-              <section className="detail-section">
-                <h2>Fichiers Fusion 360 (.f3d)</h2>
-                <ul className="file-list">
-                  {selected.f3d_files.map((file) => (
-                    <li key={file} className="file-item">
-                      <span className="file-icon">📐</span>
-                      {file}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-
-            {totalFiles === 0 && (
-              <section className="detail-section">
-                <div className="drop-hint">
-                  <span>📥</span>
-                  <p>Glisse tes fichiers .3mf ou .f3d ici pour les ajouter au projet.</p>
-                </div>
-              </section>
-            )}
-
-            {/* Timelapses */}
-            {selected.mp4_files.length > 0 && (
-              <section className="detail-section">
-                <h2>Timelapses</h2>
-                <div className="video-grid">
-                  {selected.mp4_files.map((file) => {
-                    const src = convertFileSrc(`${selected.path}\\${file}`);
-                    return (
-                      <button
-                        key={file}
-                        className="video-card"
-                        onClick={() => setVideoModal({ src, name: file })}
-                      >
-                        <video
-                          src={src}
-                          className="video-thumb"
-                          muted
-                          preload="metadata"
-                        />
-                        <div className="video-card-overlay">
-                          <span className="video-play-icon">▶</span>
-                        </div>
-                        <span className="video-label" title={file}>{file}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
-
-            {/* Sessions d'impression */}
-            <section className="detail-section">
-              <div className="section-header-row">
-                <h2>Sessions d'impression</h2>
-                {!sessionForm && (
-                  <button className="btn-primary-sm" onClick={openNewSession}>
-                    + Nouvelle session
+              {/* Colonne gauche : onglets Résumé / Fichiers */}
+              <div className="project-files-panel">
+                <div className="panel-tabs">
+                  <button className={`panel-tab-btn ${leftTab === "cost" ? "active" : ""}`} onClick={() => setLeftTab("cost")}>
+                    📊 Résumé
                   </button>
-                )}
-              </div>
+                  <button className={`panel-tab-btn ${leftTab === "files" ? "active" : ""}`} onClick={() => setLeftTab("files")}>
+                    📁 Fichiers
+                  </button>
+                </div>
 
-              {/* Formulaire session */}
-              {sessionForm && (
-                <div className="session-form">
-                  <div className="session-form-row">
-                    <label>Nom de la session</label>
-                    <input
-                      className="cons-form-input"
-                      placeholder="ex : Plateau principal, Test support…"
-                      value={sessionForm.name}
-                      onChange={(e) => setSessionForm({ ...sessionForm, name: e.target.value })}
-                    />
-                  </div>
-                  <div className="session-form-row">
-                    <label>Fichier 3MF</label>
-                    {selected.files_3mf.length > 0 ? (
-                      <select
-                        className="cons-form-select"
-                        value={sessionForm.file_3mf}
-                        onChange={(e) => setSessionForm({ ...sessionForm, file_3mf: e.target.value })}
-                      >
-                        {selected.files_3mf.map((f) => (
-                          <option key={f} value={f}>{f}</option>
-                        ))}
-                      </select>
+                {leftTab === "cost" ? (
+                  /* ── Résumé des coûts ── */
+                  <div className="cost-summary">
+                    {selected.sessions.length === 0 ? (
+                      <p className="empty-files" style={{ padding: "12px 0" }}>Aucune session — pas de coût calculé.</p>
                     ) : (
-                      <input
-                        className="cons-form-input"
-                        placeholder="nom-du-fichier.3mf"
-                        value={sessionForm.file_3mf}
-                        onChange={(e) => setSessionForm({ ...sessionForm, file_3mf: e.target.value })}
-                      />
-                    )}
-                  </div>
-                  <div className="session-form-row">
-                    <label>Imprimante</label>
-                    {printers.length > 0 ? (
-                      <select
-                        className="cons-form-select"
-                        value={sessionForm.printer_id}
-                        onChange={(e) => setSessionForm({ ...sessionForm, printer_id: e.target.value })}
-                      >
-                        {printers.map((p) => (
-                          <option key={p.id} value={p.id}>{p.name} — {p.power_w} W</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span className="session-form-hint">Aucune imprimante — configure-en dans Consommables</span>
-                    )}
-                  </div>
-                  <div className="session-form-row">
-                    <label>Durée d'impression</label>
-                    <div className="cons-form-price-row">
-                      <input
-                        className="cons-form-input cons-form-price"
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        placeholder="0.00"
-                        value={sessionForm.print_time_h}
-                        onChange={(e) => setSessionForm({ ...sessionForm, print_time_h: e.target.value })}
-                      />
-                      <span className="cons-form-unit">h</span>
-                    </div>
-                  </div>
-
-                  {/* Consommables de la session */}
-                  <div className="session-form-cons-section">
-                    <span className="session-form-cons-label">Consommables</span>
-                    {sessionForm.consumables.length > 0 && (
-                      <div className="session-form-cons-list">
-                        {sessionForm.consumables.map((sc) => {
-                          const c = consumables.find((x) => x.id === sc.consumable_id);
+                      <>
+                        {selected.sessions.map((s, idx) => {
+                          const pr = printers.find((p) => p.id === s.printer_id);
+                          const { mat, elec } = sessionCost(s);
+                          const total = mat + elec;
+                          const b64 = thumbnails[s.file_3mf];
                           return (
-                            <div key={sc.consumable_id} className="session-form-cons-row">
-                              <span className="session-form-cons-name">{c?.name ?? "?"}</span>
-                              <span className="session-form-cons-qty">{sc.quantity} {c ? unitLabel(c) : ""}</span>
-                              <button
-                                className="btn-icon-sm btn-danger-icon"
-                                onClick={() => removeConsFromSession(sc.consumable_id)}
-                              >🗑</button>
+                            <div key={s.id} className="cost-summary-session">
+                              {b64 && (
+                                <img src={`data:image/png;base64,${b64}`} className="cost-summary-thumb" alt={s.file_3mf} />
+                              )}
+                              <div className="cost-summary-session-title">
+                                <span className="cost-summary-index">#{idx + 1}</span>
+                                <span className="cost-summary-name">{s.name || s.file_3mf || "Session"}</span>
+                              </div>
+                              {pr && <div className="cost-summary-meta">🖨 {pr.name} · ⏱ {s.print_time_h} h</div>}
+                              <div className="cost-summary-lines">
+                                {mat > 0 && <div className="cost-summary-line"><span>Matière</span><span>{mat.toFixed(2)} €</span></div>}
+                                {elec > 0 && <div className="cost-summary-line"><span>Électricité</span><span>{elec.toFixed(3)} €</span></div>}
+                                {total > 0 && <div className="cost-summary-line cost-summary-subtotal"><span>Sous-total</span><span>{total.toFixed(2)} €</span></div>}
+                                {total === 0 && <div className="cost-summary-line"><span style={{ color: "#aaa" }}>Pas de coût configuré</span></div>}
+                              </div>
                             </div>
                           );
                         })}
-                      </div>
-                    )}
-                    {consumables.length > 0 && (
-                      <div className="cost-add-form">
-                        <select
-                          className="cost-add-select"
-                          value={sessionConsPickId}
-                          onChange={(e) => setSessionConsPickId(e.target.value)}
-                        >
-                          <option value="">+ Ajouter un consommable…</option>
-                          {[...consumables]
-                            .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name))
-                            .map((c) => (
-                              <option key={c.id} value={c.id}>
-                                {c.category ? `[${c.category}] ` : ""}{c.name}
-                              </option>
-                            ))}
-                        </select>
-                        <input
-                          className="cost-add-qty"
-                          type="number"
-                          min="0"
-                          step="any"
-                          placeholder="Qté"
-                          value={sessionConsPickQty}
-                          onChange={(e) => setSessionConsPickQty(e.target.value)}
-                        />
-                        {sessionConsPickId && (
-                          <span className="cost-add-unit">
-                            {unitLabel(consumables.find((c) => c.id === sessionConsPickId)!)}
-                          </span>
-                        )}
-                        <button
-                          className="btn-save"
-                          onClick={addConsToSession}
-                          disabled={!sessionConsPickId || !sessionConsPickQty || parseFloat(sessionConsPickQty) <= 0}
-                        >
-                          Ajouter
-                        </button>
-                      </div>
-                    )}
-                  </div>
 
-                  <div className="cons-form-actions">
-                    <button className="btn-cancel" onClick={() => setSessionForm(null)}>Annuler</button>
-                    <button
-                      className="btn-save"
-                      onClick={handleSaveSession}
-                      disabled={!sessionForm.print_time_h || parseFloat(sessionForm.print_time_h) <= 0}
-                    >
-                      {sessionForm.id ? "Mettre à jour" : "Créer la session"}
-                    </button>
-                  </div>
-                </div>
-              )}
+                        {/* Grand total */}
+                        {(() => {
+                          const grand = selected.sessions.reduce((acc, s) => {
+                            const { mat, elec } = sessionCost(s);
+                            return { mat: acc.mat + mat, elec: acc.elec + elec };
+                          }, { mat: 0, elec: 0 });
+                          const total = grand.mat + grand.elec;
+                          return (
+                            <div className="cost-summary-total-block">
+                              <div className="cost-summary-total-row">
+                                <span>Total projet</span>
+                                <span className="cost-summary-total-val">{total.toFixed(2)} €</span>
+                              </div>
+                              <div className="cost-summary-qty-row">
+                                <span>Quantité</span>
+                                <div className="cost-summary-qty-ctrl">
+                                  <button className="qty-btn" onClick={() => handleChangeQuantity(-1)} disabled={selected.quantity <= 1}>−</button>
+                                  <span className="qty-val">{selected.quantity}</span>
+                                  <button className="qty-btn" onClick={() => handleChangeQuantity(1)}>+</button>
+                                </div>
+                              </div>
+                              {selected.quantity > 1 && total > 0 && (
+                                <div className="cost-summary-unit-row">
+                                  <span>Par objet</span>
+                                  <span className="cost-summary-unit-val">{(total / selected.quantity).toFixed(2)} €</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </>
+                    )}
 
-              {/* Liste des sessions */}
-              {selected.sessions.length === 0 && !sessionForm ? (
-                <p className="empty-files">Aucune session d'impression enregistrée.</p>
-              ) : (
-                <div className="session-list">
-                  {selected.sessions.map((s, idx) => {
-                    const pr = printers.find((p) => p.id === s.printer_id);
-                    const { mat, elec } = sessionCost(s);
-                    const total = mat + elec;
-                    return (
-                      <div key={s.id} className="session-card">
-                        <div className="session-card-header">
-                          <span className="session-card-index">#{idx + 1}</span>
-                          <span className="session-card-name">
-                            {s.name || s.file_3mf || "Session sans nom"}
-                          </span>
-                          <div className="session-card-actions">
-                            <button className="btn-icon-sm" title="Modifier" onClick={() => openEditSession(s)}>✏</button>
-                            <button className="btn-icon-sm btn-danger-icon" title="Supprimer" onClick={() => handleDeleteSession(s.id)}>🗑</button>
+                    {/* Quantité même sans sessions */}
+                    {selected.sessions.length === 0 && (
+                      <div className="cost-summary-total-block">
+                        <div className="cost-summary-qty-row">
+                          <span>Quantité</span>
+                          <div className="cost-summary-qty-ctrl">
+                            <button className="qty-btn" onClick={() => handleChangeQuantity(-1)} disabled={selected.quantity <= 1}>−</button>
+                            <span className="qty-val">{selected.quantity}</span>
+                            <button className="qty-btn" onClick={() => handleChangeQuantity(1)}>+</button>
                           </div>
                         </div>
-                        <div className="session-card-meta">
-                          {s.file_3mf && <span className="session-meta-chip">📦 {s.file_3mf}</span>}
-                          {pr && <span className="session-meta-chip">🖨 {pr.name}</span>}
-                          <span className="session-meta-chip">⏱ {s.print_time_h} h</span>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* ── Fichiers ── */
+                  <>
+                    {(selected.files_3mf.length > 0 || selected.stl_files.length > 0) && (
+                      <div className="files-panel-section">
+                        <h3>Fichiers d'impression</h3>
+                        <div className="thumb-grid thumb-grid-sm">
+                          {selected.files_3mf.map((file) => {
+                            const b64 = thumbnails[file];
+                            const isLoading = !(file in thumbnails);
+                            const info = printInfoMap[file];
+                            const hasInfo = info && (info.print_time !== null || info.weight_g !== null);
+                            return (
+                              <div key={file} className="thumb-card"
+                                onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, filePath: `${selected.path}\\${file}` }); }}>
+                                <div className="thumb-img-wrap">
+                                  {isLoading ? <div className="thumb-placeholder loading">⏳</div>
+                                    : b64 ? <img src={`data:image/png;base64,${b64}`} alt={file} className="thumb-img" />
+                                    : <div className="thumb-placeholder">📦</div>}
+                                </div>
+                                <span className="thumb-type-badge">3MF</span>
+                                <span className="thumb-label" title={file}>{file}</span>
+                                {hasInfo && (
+                                  <div className="thumb-print-info">
+                                    {info.print_time && <span className="thumb-print-stat">⏱ {info.print_time}</span>}
+                                    {info.weight_g !== null && <span className="thumb-print-stat">⚖ {info.weight_g!.toFixed(1)} g</span>}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                          {selected.stl_files.map((file) => {
+                            const data = stlData[file];
+                            const isLoading = !(file in stlData);
+                            return (
+                              <div key={file} className="thumb-card"
+                                onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, filePath: `${selected.path}\\${file}` }); }}>
+                                <div className="thumb-img-wrap">
+                                  {isLoading ? <div className="thumb-placeholder loading">⏳</div>
+                                    : data ? <StlViewer base64={data} />
+                                    : <div className="thumb-placeholder">📐</div>}
+                                </div>
+                                <span className="thumb-type-badge thumb-type-stl">STL</span>
+                                <span className="thumb-label" title={file}>{file}</span>
+                              </div>
+                            );
+                          })}
                         </div>
-                        {s.consumables.length > 0 && (
-                          <div className="session-cons-list">
-                            {s.consumables.map((sc) => {
+                      </div>
+                    )}
+
+                    {selected.f3d_files.length > 0 && (
+                      <div className="files-panel-section">
+                        <h3>Fusion 360</h3>
+                        <ul className="file-list">
+                          {selected.f3d_files.map((file) => (
+                            <li key={file} className="file-item">
+                              <span className="file-icon">📐</span>{file}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {selected.mp4_files.length > 0 && (
+                      <div className="files-panel-section">
+                        <h3>Timelapses</h3>
+                        <div className="video-grid">
+                          {selected.mp4_files.map((file) => {
+                            const src = convertFileSrc(`${selected.path}\\${file}`);
+                            return (
+                              <button key={file} className="video-card" onClick={() => setVideoModal({ src, name: file })}>
+                                <video src={src} className="video-thumb" muted preload="metadata" />
+                                <div className="video-card-overlay"><span className="video-play-icon">▶</span></div>
+                                <span className="video-label" title={file}>{file}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {totalFiles === 0 && (
+                      <div className="drop-hint">
+                        <span>📥</span>
+                        <p>Glisse tes fichiers .3mf ou .f3d ici.</p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* Colonne droite : sessions + markdown */}
+              <div className="project-main-panel">
+
+                {/* Sessions d'impression */}
+                <section className="detail-section">
+                  <div className="section-header-row">
+                    <h2>Sessions d'impression</h2>
+                    {!sessionForm && (
+                      <button className="btn-primary-sm" onClick={openNewSession}>+ Nouvelle session</button>
+                    )}
+                  </div>
+
+                  {sessionForm && (
+                    <div className="session-form">
+                      <div className="session-form-row">
+                        <label>Nom</label>
+                        <input className="cons-form-input" placeholder="ex : Plateau principal…"
+                          value={sessionForm.name} onChange={(e) => setSessionForm({ ...sessionForm, name: e.target.value })} />
+                      </div>
+                      <div className="session-form-row">
+                        <label>Fichier 3MF</label>
+                        {selected.files_3mf.length > 0 ? (
+                          <select className="cons-form-select" value={sessionForm.file_3mf}
+                            onChange={(e) => setSessionForm({ ...sessionForm, file_3mf: e.target.value })}>
+                            {selected.files_3mf.map((f) => <option key={f} value={f}>{f}</option>)}
+                          </select>
+                        ) : (
+                          <input className="cons-form-input" placeholder="nom-du-fichier.3mf"
+                            value={sessionForm.file_3mf} onChange={(e) => setSessionForm({ ...sessionForm, file_3mf: e.target.value })} />
+                        )}
+                      </div>
+                      <div className="session-form-row">
+                        <label>Imprimante</label>
+                        {printers.length > 0 ? (
+                          <select className="cons-form-select" value={sessionForm.printer_id}
+                            onChange={(e) => setSessionForm({ ...sessionForm, printer_id: e.target.value })}>
+                            {printers.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.power_w} W</option>)}
+                          </select>
+                        ) : (
+                          <span className="session-form-hint">Aucune imprimante — configure-en dans Consommables</span>
+                        )}
+                      </div>
+                      <div className="session-form-row">
+                        <label>Durée</label>
+                        <div className="cons-form-price-row">
+                          <input className="cons-form-input cons-form-price" type="number" min="0" step="0.01" placeholder="0.00"
+                            value={sessionForm.print_time_h} onChange={(e) => setSessionForm({ ...sessionForm, print_time_h: e.target.value })} />
+                          <span className="cons-form-unit">h</span>
+                        </div>
+                      </div>
+                      <div className="session-form-cons-section">
+                        <span className="session-form-cons-label">Consommables</span>
+                        {sessionForm.consumables.length > 0 && (
+                          <div className="session-form-cons-list">
+                            {sessionForm.consumables.map((sc) => {
                               const c = consumables.find((x) => x.id === sc.consumable_id);
                               return (
-                                <span key={sc.consumable_id} className="session-cons-chip">
-                                  {c?.name ?? "?"} × {sc.quantity}{c ? ` ${unitLabel(c)}` : ""}
-                                  {c ? ` — ${calcCost(c, sc.quantity).toFixed(2)} €` : ""}
-                                </span>
+                                <div key={sc.consumable_id} className="session-form-cons-row">
+                                  <span className="session-form-cons-name">{c?.name ?? "?"}</span>
+                                  <span className="session-form-cons-qty">{sc.quantity} {c ? unitLabel(c) : ""}</span>
+                                  <button className="btn-icon-sm btn-danger-icon" onClick={() => removeConsFromSession(sc.consumable_id)}>🗑</button>
+                                </div>
                               );
                             })}
                           </div>
                         )}
-                        {(mat > 0 || elec > 0) && (
-                          <div className="session-card-cost">
-                            {mat > 0 && <span>Matière : {mat.toFixed(2)} €</span>}
-                            {elec > 0 && <span>Électricité : {elec.toFixed(3)} €</span>}
-                            <span className="session-card-total">Total : {total.toFixed(2)} €</span>
+                        {consumables.length > 0 && (
+                          <div className="cost-add-form">
+                            <select className="cost-add-select" value={sessionConsPickId} onChange={(e) => setSessionConsPickId(e.target.value)}>
+                              <option value="">+ Ajouter un consommable…</option>
+                              {[...consumables].sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name)).map((c) => (
+                                <option key={c.id} value={c.id}>{c.category ? `[${c.category}] ` : ""}{c.name}</option>
+                              ))}
+                            </select>
+                            <input className="cost-add-qty" type="number" min="0" step="any" placeholder="Qté"
+                              value={sessionConsPickQty} onChange={(e) => setSessionConsPickQty(e.target.value)} />
+                            {sessionConsPickId && (
+                              <span className="cost-add-unit">{unitLabel(consumables.find((c) => c.id === sessionConsPickId)!)}</span>
+                            )}
+                            <button className="btn-save" onClick={addConsToSession}
+                              disabled={!sessionConsPickId || !sessionConsPickQty || parseFloat(sessionConsPickQty) <= 0}>Ajouter</button>
                           </div>
                         )}
                       </div>
+                      <div className="cons-form-actions">
+                        <button className="btn-cancel" onClick={() => setSessionForm(null)}>Annuler</button>
+                        <button className="btn-save" onClick={handleSaveSession}
+                          disabled={!sessionForm.print_time_h || parseFloat(sessionForm.print_time_h) <= 0}>
+                          {sessionForm.id ? "Mettre à jour" : "Créer la session"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {selected.sessions.length === 0 && !sessionForm ? (
+                    <p className="empty-files">Aucune session d'impression enregistrée.</p>
+                  ) : (
+                    <div className="session-list">
+                      {selected.sessions.map((s, idx) => {
+                        const pr = printers.find((p) => p.id === s.printer_id);
+                        const { mat, elec } = sessionCost(s);
+                        const total = mat + elec;
+                        const thumb = thumbnails[s.file_3mf];
+                        return (
+                          <div key={s.id} className="session-card">
+                            <div className="session-card-header">
+                              {thumb && (
+                                <img src={`data:image/png;base64,${thumb}`} className="session-card-thumb" alt={s.file_3mf} />
+                              )}
+                              <div className="session-card-title">
+                                <span className="session-card-index">#{idx + 1}</span>
+                                <span className="session-card-name">{s.name || s.file_3mf || "Session sans nom"}</span>
+                              </div>
+                              <div className="session-card-actions">
+                                <button className="btn-icon-sm" title="Modifier" onClick={() => openEditSession(s)}>✏</button>
+                                <button className="btn-icon-sm btn-danger-icon" title="Supprimer" onClick={() => handleDeleteSession(s.id)}>🗑</button>
+                              </div>
+                            </div>
+                            <div className="session-card-meta">
+                              {s.file_3mf && <span className="session-meta-chip">📦 {s.file_3mf}</span>}
+                              {pr && <span className="session-meta-chip">🖨 {pr.name}</span>}
+                              <span className="session-meta-chip">⏱ {s.print_time_h} h</span>
+                            </div>
+                            {s.consumables.length > 0 && (
+                              <div className="session-cons-list">
+                                {s.consumables.map((sc) => {
+                                  const c = consumables.find((x) => x.id === sc.consumable_id);
+                                  return (
+                                    <span key={sc.consumable_id} className="session-cons-chip">
+                                      {c?.name ?? "?"} × {sc.quantity}{c ? ` ${unitLabel(c)}` : ""}
+                                      {c ? ` — ${calcCost(c, sc.quantity).toFixed(2)} €` : ""}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            )}
+                            {(mat > 0 || elec > 0) && (
+                              <div className="session-card-cost">
+                                {mat > 0 && <span>Matière : {mat.toFixed(2)} €</span>}
+                                {elec > 0 && <span>Électricité : {elec.toFixed(3)} €</span>}
+                                <span className="session-card-total">Total : {total.toFixed(2)} €</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {selected.sessions.length > 1 && (() => {
+                    const grand = selected.sessions.reduce((acc, s) => {
+                      const { mat, elec } = sessionCost(s);
+                      return { mat: acc.mat + mat, elec: acc.elec + elec };
+                    }, { mat: 0, elec: 0 });
+                    return (
+                      <div className="cost-total" style={{ marginTop: 8 }}>
+                        Total projet : {(grand.mat + grand.elec).toFixed(2)} €
+                        {grand.elec > 0 && ` (dont ${grand.elec.toFixed(3)} € élec.)`}
+                      </div>
                     );
-                  })}
-                </div>
-              )}
+                  })()}
+                </section>
 
-              {/* Coût global */}
-              {selected.sessions.length > 1 && (() => {
-                const grand = selected.sessions.reduce((acc, s) => {
-                  const { mat, elec } = sessionCost(s);
-                  return { mat: acc.mat + mat, elec: acc.elec + elec };
-                }, { mat: 0, elec: 0 });
-                return (
-                  <div className="cost-total" style={{ marginTop: 8 }}>
-                    Total projet : {(grand.mat + grand.elec).toFixed(2)} €
-                    {grand.elec > 0 && ` (dont ${grand.elec.toFixed(3)} € élec.)`}
+                {/* Description Markdown */}
+                <section className="detail-section">
+                  <div className="section-header-row">
+                    <h2>Description (main.md)</h2>
+                    <button className="btn-edit" onClick={() => {
+                      setEditorContent(selected.markdown_content ?? "");
+                      setEditorTab("edit");
+                      setSaveError(null);
+                      setEditorOpen(true);
+                    }}>
+                      {selected.markdown_content ? "✏️ Modifier" : "✏️ Créer"}
+                    </button>
                   </div>
-                );
-              })()}
-            </section>
+                  {selected.markdown_content ? (
+                    <div className="markdown-body">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{selected.markdown_content}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    <p className="empty-files">Aucun fichier main.md — clique sur "Créer" pour en rédiger un.</p>
+                  )}
+                </section>
 
-            {/* Description Markdown */}
-            <section className="detail-section">
-              <div className="section-header-row">
-                <h2>Description (main.md)</h2>
-                <button
-                  className="btn-edit"
-                  onClick={() => {
-                    setEditorContent(selected.markdown_content ?? "");
-                    setEditorTab("edit");
-                    setSaveError(null);
-                    setEditorOpen(true);
-                  }}
-                >
-                  {selected.markdown_content ? "✏️ Modifier" : "✏️ Créer"}
-                </button>
               </div>
-              {selected.markdown_content ? (
-                <div className="markdown-body">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {selected.markdown_content}
-                  </ReactMarkdown>
-                </div>
-              ) : (
-                <p className="empty-files">
-                  Aucun fichier main.md — clique sur "Créer" pour en rédiger un.
-                </p>
-              )}
-            </section>
+            </div>
           </div>
         )}
       </main>

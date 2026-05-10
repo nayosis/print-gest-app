@@ -49,6 +49,7 @@ pub struct Project {
     pub markdown_content: Option<String>,
     pub status: String,
     pub sessions: Vec<PrintSession>,
+    pub quantity: u32,
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -58,10 +59,11 @@ struct Meta {
     tags: Vec<String>,
     status: String,
     sessions: Vec<PrintSession>,
+    quantity: u32,
 }
 
 fn read_meta(dir: &Path) -> Meta {
-    let empty = Meta { title: None, tags: Vec::new(), status: "draft".into(), sessions: Vec::new() };
+    let empty = Meta { title: None, tags: Vec::new(), status: "draft".into(), sessions: Vec::new(), quantity: 1 };
     let Ok(content) = fs::read_to_string(dir.join("meta.json")) else { return empty };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else { return empty };
     let title = v["title"].as_str().map(|s| s.to_string());
@@ -72,7 +74,8 @@ fn read_meta(dir: &Path) -> Meta {
     let sessions = v["sessions"].as_array()
         .map(|arr| arr.iter().filter_map(|i| serde_json::from_value::<PrintSession>(i.clone()).ok()).collect())
         .unwrap_or_default();
-    Meta { title, tags, status, sessions }
+    let quantity = v["quantity"].as_u64().unwrap_or(1).max(1) as u32;
+    Meta { title, tags, status, sessions, quantity }
 }
 
 fn to_camel_case(s: &str) -> String {
@@ -155,6 +158,7 @@ fn scan_project_dir(path: &Path) -> Project {
         markdown_content,
         status: meta.status,
         sessions: meta.sessions,
+        quantity: meta.quantity,
     }
 }
 
@@ -405,11 +409,13 @@ fn save_project_sessions(
     project_path: String,
     sessions: Vec<PrintSession>,
     status: String,
+    quantity: u32,
 ) -> Result<Project, String> {
     let path = Path::new(&project_path);
     let mut meta = read_meta_json(path);
     meta["sessions"] = serde_json::to_value(&sessions).map_err(|e| e.to_string())?;
     meta["status"] = serde_json::json!(status);
+    meta["quantity"] = serde_json::json!(quantity.max(1));
     fs::write(
         path.join("meta.json"),
         serde_json::to_string_pretty(&meta).unwrap(),
