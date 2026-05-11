@@ -2013,7 +2013,6 @@ body {
   flex-shrink: 0;
   background: #f4f5f8;
   border-bottom: 2px solid var(--border);
-  max-height: 140px;
 }
 
 .summary-sessions-scroll {
@@ -2100,7 +2099,6 @@ body {
   gap: 4px;
   border-left: 1px solid var(--border);
   background: white;
-  overflow-y: auto;
   justify-content: center;
 }
 
