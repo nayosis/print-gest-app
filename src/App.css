@@ -314,10 +314,12 @@ body {
   color: #aaa;
 }
 
-/* Colonne droite : onglets + contenu */
+/* Panneau principal : onglets + contenu */
 .project-main-panel {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -1971,6 +1973,7 @@ body {
 /* Contenu des onglets */
 .tab-content {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 24px 32px;
 }
