@@ -60,30 +60,34 @@ jobs:
         run: |
           node -e "
             const fs = require('fs');
-            const v = process.env.VERSION;
+            const tag = process.env.VERSION;
 
-            // MSI requires numeric-only pre-release: convert e.g. '1.0.0-rc03' -> '1.0.3'
-            function toMsiVersion(raw) {
-              const m = raw.match(/^(\d+)\.(\d+)\.(\d+)(?:-[a-z]+(\d+))?$/i);
-              if (!m) return raw;
-              const [, maj, min, patch, pre] = m;
-              return pre ? maj + '.' + min + '.' + pre : maj + '.' + min + '.' + patch;
+            // Strip leading 'v' (GitHub tags are often 'v1.0.0-rc03')
+            const semver = tag.replace(/^v/, '');
+
+            // Tauri/MSI require numeric-only pre-release: '1.0.0-rc03' -> '1.0.0-3'
+            // MSI maps it to the 4th version component (1.0.0.3)
+            function toBuildVersion(v) {
+              const m = v.match(/^(\d+\.\d+\.\d+)(?:-[a-zA-Z]*(\d+))?$/);
+              if (!m) return v;
+              const [, base, pre] = m;
+              return pre ? base + '-' + parseInt(pre, 10) : base;
             }
-            const msiV = toMsiVersion(v);
+            const buildV = toBuildVersion(semver);
 
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = v;
+            pkg.version = semver;
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
 
             const cfg = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
-            cfg.version = msiV;
+            cfg.version = buildV;
             fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(cfg, null, 2) + '\n');
 
             let cargo = fs.readFileSync('src-tauri/Cargo.toml', 'utf8');
-            cargo = cargo.replace(/^version = \"[^\"]*\"/m, 'version = \"' + msiV + '\"');
+            cargo = cargo.replace(/^version = \"[^\"]*\"/m, 'version = \"' + buildV + '\"');
             fs.writeFileSync('src-tauri/Cargo.toml', cargo);
 
-            console.log('Tag version:', v, '| Build version:', msiV);
+            console.log('Tag:', tag, '| semver:', semver, '| build:', buildV);
           "
 
       - name: Build & publish release
