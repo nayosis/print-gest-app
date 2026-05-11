@@ -115,6 +115,16 @@ export function SessionsTab({
         )}
       </div>
 
+      <div className="iteration-banner">
+        <span className="iteration-banner-icon">🔄</span>
+        <div className="iteration-banner-text">
+          <strong>1 itération</strong> = toutes les sessions réalisées une fois
+          {selected.sessions.length > 0 && (
+            <> — <strong>{selected.sessions.length} session{selected.sessions.length > 1 ? "s" : ""}</strong> produisant <strong>{selected.quantity} objet{selected.quantity > 1 ? "s" : ""}</strong></>
+          )}
+        </div>
+      </div>
+
       {sessionFormData && (
         <div className="session-form">
           <div className="session-form-row">
