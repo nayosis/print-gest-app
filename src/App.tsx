@@ -2,9 +2,12 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Project, Consumable, PrintSession } from "./model";
+import {
+  Project, Consumable, PrintSession,
+  FolderNode, flattenProjects, updateProjectInTree,
+} from "./model";
 import { Printer } from "./model/printer";
-import { sortedInsert, displayName, toolName } from "./utils/format";
+import { displayName, toolName } from "./utils/format";
 import { useThumbnails } from "./hooks/useThumbnails";
 import { ContextMenu, ContextMenuItem } from "./ContextMenu";
 import { Sidebar } from "./components/Sidebar";
@@ -26,6 +29,7 @@ function App() {
   const [rootFolder, setRootFolder] = useState<string | null>(
     () => localStorage.getItem(STORAGE_KEY)
   );
+  const [folderTree, setFolderTree] = useState<FolderNode | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selected, setSelected] = useState<Project | null>(null);
   const selectedRef = useRef<Project | null>(null);
@@ -35,14 +39,12 @@ function App() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   const [isDragging, setIsDragging] = useState(false);
 
   const [toolPath, setToolPath] = useState<string | null>(
     () => localStorage.getItem(TOOL_KEY)
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
-
   const [activeTagFilter, setActiveTagFilter] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
@@ -52,18 +54,19 @@ function App() {
   const [showConsumablesView, setShowConsumablesView] = useState(false);
 
   const [rightTab, setRightTab] = useState<"description" | "sessions" | "costs" | "config" | "files">("description");
-
   const [videoModal, setVideoModal] = useState<{ src: string; name: string } | null>(null);
-
-  const [contextMenu, setContextMenu] = useState<{
-    x: number;
-    y: number;
-    filePath: string;
-  } | null>(null);
-
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; filePath: string } | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
 
-  // ── Scan dossier racine ──
+  // ── Helper : mettre à jour un projet dans les 3 états ─────────────────────
+
+  function applyProjectUpdate(updated: Project) {
+    setSelected(prev => prev?.path === updated.path ? updated : prev);
+    setProjects(prev => prev.map(p => p.path === updated.path ? updated : p));
+    setFolderTree(prev => prev ? updateProjectInTree(prev, updated) : prev);
+  }
+
+  // ── Scan complet (changement de dossier racine) ────────────────────────────
 
   const scanFolder = useCallback(async (folderPath: string) => {
     setLoading(true);
@@ -72,19 +75,44 @@ function App() {
     setEditorOpen(false);
     setShowConsumablesView(false);
     try {
-      const [result, cons, prints, kwh] = await Promise.all([
-        invoke<Project[]>("scan_projects", { folderPath }),
+      const [tree, cons, prints, kwh] = await Promise.all([
+        invoke<FolderNode>("scan_folder_tree", { folderPath }),
         invoke<Consumable[]>("get_consumables", { rootPath: folderPath }).catch(() => [] as Consumable[]),
         invoke<Printer[]>("get_printers", { rootPath: folderPath }).catch(() => [] as Printer[]),
         invoke<number>("get_electricity_price", { rootPath: folderPath }).catch(() => 0),
       ]);
-      setProjects(result);
+      setFolderTree(tree);
+      setProjects(flattenProjects(tree));
       setConsumables(cons);
       setPrinters(prints);
       setElectricityPrice(kwh);
     } catch (e) {
       setError(String(e));
+      setFolderTree(null);
       setProjects([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // ── Refresh léger (conserve la sélection) ─────────────────────────────────
+
+  const refreshTree = useCallback(async (folderPath: string, selectPath?: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const tree = await invoke<FolderNode>("scan_folder_tree", { folderPath });
+      setFolderTree(tree);
+      const flat = flattenProjects(tree);
+      setProjects(flat);
+      if (selectPath) {
+        const p = flat.find(x => x.path === selectPath);
+        if (p) { setSelected(p); setShowConsumablesView(false); }
+      } else {
+        setSelected(prev => prev ? (flat.find(p => p.path === prev.path) ?? null) : null);
+      }
+    } catch (e) {
+      setError(String(e));
     } finally {
       setLoading(false);
     }
@@ -94,21 +122,19 @@ function App() {
     if (rootFolder) scanFolder(rootFolder);
   }, [rootFolder, scanFolder]);
 
-  // Reset états UI quand on change de projet
+  // Reset UI quand on change de projet
   useEffect(() => {
     setEditorOpen(false);
     setRightTab("description");
   }, [selected?.path]);
 
-  // ── Drag & Drop ──
+  // ── Drag & Drop fichiers vers projet ──────────────────────────────────────
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-
     getCurrentWebviewWindow()
       .onDragDropEvent((event) => {
         const current = selectedRef.current;
-
         if (event.payload.type === "over") {
           if (current) setIsDragging(true);
         } else if (event.payload.type === "leave") {
@@ -116,32 +142,23 @@ function App() {
         } else if (event.payload.type === "drop") {
           setIsDragging(false);
           if (!current) return;
-
           const paths: string[] = (event.payload as { paths: string[] }).paths;
           if (paths.length === 0) return;
-
           invoke<Project>("copy_files_to_project", {
             projectPath: current.path,
             filePaths: paths,
-          }).then((updated) => {
-            setSelected(updated);
-            setProjects((prev) => sortedInsert(prev, updated));
-          });
+          }).then(applyProjectUpdate);
         }
       })
-      .then((fn) => {
-        unlisten = fn;
-      });
-
+      .then(fn => { unlisten = fn; });
     return () => unlisten?.();
   }, []);
 
-  // ── Sélection du dossier racine ──
+  // ── Sélection du dossier racine ───────────────────────────────────────────
 
   const handleSelectFolder = async () => {
     const picked = await open({
-      directory: true,
-      multiple: false,
+      directory: true, multiple: false,
       title: "Sélectionner le dossier des projets",
     });
     if (picked && typeof picked === "string") {
@@ -150,7 +167,7 @@ function App() {
     }
   };
 
-  // ── Persistance sessions ──
+  // ── Persistance sessions ──────────────────────────────────────────────────
 
   const persistSessions = async (
     sessions: PrintSession[],
@@ -168,14 +185,12 @@ function App() {
       designRate: opts?.designRate ?? selected.design_rate,
       sellingPrice: opts?.sellingPrice ?? selected.selling_price,
     });
-    setSelected(updated);
-    setProjects((prev) => sortedInsert(prev, updated));
+    applyProjectUpdate(updated);
   };
 
   const handleChangeStatus = () => {
     if (!selected) return;
-    const newStatus = selected.status === "done" ? "draft" : "done";
-    persistSessions(selected.sessions, newStatus, selected.quantity);
+    persistSessions(selected.sessions, selected.status === "done" ? "draft" : "done", selected.quantity);
   };
 
   const handleChangeQuantity = (delta: number) => {
@@ -185,49 +200,36 @@ function App() {
 
   const handleSavePricing = (designTimeH: number, designRate: number, sellingPrice: number) => {
     if (!selected) return;
-    persistSessions(selected.sessions, selected.status, selected.quantity, {
-      designTimeH,
-      designRate,
-      sellingPrice,
-    });
+    persistSessions(selected.sessions, selected.status, selected.quantity, { designTimeH, designRate, sellingPrice });
   };
 
-  // ── Tags ──
+  // ── Tags ──────────────────────────────────────────────────────────────────
 
   const handleAddTag = async (tag: string) => {
     if (!selected || selected.tags.includes(tag)) return;
     const newTags = [...selected.tags, tag];
     await invoke("save_tags", { projectPath: selected.path, tags: newTags });
-    const updated = { ...selected, tags: newTags };
-    setSelected(updated);
-    setProjects((prev) => sortedInsert(prev, updated));
+    applyProjectUpdate({ ...selected, tags: newTags });
   };
 
   const handleRemoveTag = async (tag: string) => {
     if (!selected) return;
-    const newTags = selected.tags.filter((t) => t !== tag);
+    const newTags = selected.tags.filter(t => t !== tag);
     await invoke("save_tags", { projectPath: selected.path, tags: newTags });
-    const updated = { ...selected, tags: newTags };
-    setSelected(updated);
-    setProjects((prev) => sortedInsert(prev, updated));
+    applyProjectUpdate({ ...selected, tags: newTags });
     if (activeTagFilter === tag) setActiveTagFilter(null);
   };
 
-  // ── Éditeur Markdown ──
+  // ── Éditeur Markdown ──────────────────────────────────────────────────────
 
   const handleSave = async (content: string): Promise<void> => {
     if (!selected) return;
-    await invoke("save_markdown", {
-      projectPath: selected.path,
-      content,
-    });
-    const updated = { ...selected, markdown_content: content };
-    setSelected(updated);
-    setProjects((prev) => sortedInsert(prev, updated));
+    await invoke("save_markdown", { projectPath: selected.path, content });
+    applyProjectUpdate({ ...selected, markdown_content: content });
     setEditorOpen(false);
   };
 
-  // ── Outil externe ──
+  // ── Outil externe ─────────────────────────────────────────────────────────
 
   const handlePickTool = async () => {
     const picked = await open({
@@ -248,78 +250,49 @@ function App() {
 
   const handleOpenWith = (filePath: string) => {
     if (!toolPath) return;
-    invoke("open_with_tool", { filePath, toolPath }).catch((e) =>
-      alert(`Erreur : ${e}`)
-    );
+    invoke("open_with_tool", { filePath, toolPath }).catch(e => alert(`Erreur : ${e}`));
   };
 
   const handleArchiveFile = (filePath: string) => {
     if (!selected) return;
     invoke<Project>("archive_file", { filePath })
-      .then((updated) => {
-        setSelected(updated);
-        setProjects((prev) => sortedInsert(prev, updated));
-      })
-      .catch((e) => alert(`Erreur archivage : ${e}`));
+      .then(applyProjectUpdate)
+      .catch(e => alert(`Erreur archivage : ${e}`));
   };
 
   const buildContextMenuItems = (filePath: string): ContextMenuItem[] => {
     const items: ContextMenuItem[] = [];
     if (toolPath) {
-      items.push({
-        label: `Ouvrir avec ${toolName(toolPath)}`,
-        icon: "🚀",
-        onClick: () => handleOpenWith(filePath),
-      });
+      items.push({ label: `Ouvrir avec ${toolName(toolPath)}`, icon: "🚀", onClick: () => handleOpenWith(filePath) });
     } else {
-      items.push({
-        label: "Configurer un outil externe…",
-        icon: "⚙️",
-        onClick: () => setSettingsOpen(true),
-      });
+      items.push({ label: "Configurer un outil externe…", icon: "⚙️", onClick: () => setSettingsOpen(true) });
     }
-    items.push({
-      label: "Archiver",
-      icon: "📦",
-      onClick: () => handleArchiveFile(filePath),
-    });
+    items.push({ label: "Archiver", icon: "📦", onClick: () => handleArchiveFile(filePath) });
     return items;
   };
-
-  const visibleProjects = projects.filter((p) => {
-    const q = search.trim().toLowerCase();
-    const matchText = !q || displayName(p).toLowerCase().includes(q) || p.name.toLowerCase().includes(q);
-    const matchTag = !activeTagFilter || p.tags.includes(activeTagFilter);
-    return matchText && matchTag;
-  });
-
-  const totalFiles = selected
-    ? selected.f3d_files.length + selected.files_3mf.length + selected.stl_files.length
-    : 0;
 
   return (
     <div className="app">
       <Sidebar
         rootFolder={rootFolder}
-        projects={visibleProjects}
+        folderTree={folderTree}
+        projects={projects}
         selected={selected}
         loading={loading}
         error={error}
         showConsumablesView={showConsumablesView}
         search={search}
         activeTagFilter={activeTagFilter}
-        onSelectProject={(p) => { setSelected(p); setShowConsumablesView(false); }}
+        onSelectProject={p => { setSelected(p); setShowConsumablesView(false); }}
         onSelectFolder={handleSelectFolder}
-        onRefresh={() => rootFolder && scanFolder(rootFolder)}
+        onRefresh={(selectPath) => rootFolder && refreshTree(rootFolder, selectPath)}
         onShowConsumables={() => { setShowConsumablesView(true); setSelected(null); }}
         onOpenSettings={() => setSettingsOpen(true)}
         onSearchChange={setSearch}
         onClearTagFilter={() => setActiveTagFilter(null)}
-        onTagClick={(tag) => setActiveTagFilter((prev) => (prev === tag ? null : tag))}
-        onProjectCreated={(p) => {
-          setProjects((prev) => sortedInsert(prev, p));
-          setSelected(p);
-          setShowConsumablesView(false);
+        onTagClick={tag => setActiveTagFilter(prev => prev === tag ? null : tag)}
+        onProjectCreated={p => {
+          if (rootFolder) refreshTree(rootFolder, p.path);
         }}
       />
 
@@ -329,9 +302,7 @@ function App() {
             <div className="empty-icon">📂</div>
             <h2>Bienvenue dans Print Gest</h2>
             <p>Sélectionne le dossier contenant tes projets d'impression 3D.</p>
-            <button className="btn-primary" onClick={handleSelectFolder}>
-              Choisir un dossier
-            </button>
+            <button className="btn-primary" onClick={handleSelectFolder}>Choisir un dossier</button>
           </div>
         ) : showConsumablesView ? (
           <ConsumablesView
@@ -365,9 +336,9 @@ function App() {
               activeTagFilter={activeTagFilter}
               onTagFilterChange={setActiveTagFilter}
               onStatusChange={handleChangeStatus}
-              onRenamed={(updated) => {
-                setSelected(updated);
-                setProjects((prev) => sortedInsert(prev, updated));
+              onRenamed={updated => {
+                applyProjectUpdate(updated);
+                if (rootFolder) refreshTree(rootFolder, updated.path);
               }}
               onTagAdded={handleAddTag}
               onTagRemoved={handleRemoveTag}
@@ -392,50 +363,21 @@ function App() {
                 ) : (
                   <>
                     <div className="main-tabs">
-                      <button
-                        className={`main-tab-btn ${rightTab === "description" ? "active" : ""}`}
-                        onClick={() => setRightTab("description")}
-                      >
-                        📝 Description
-                      </button>
-                      <button
-                        className={`main-tab-btn ${rightTab === "sessions" ? "active" : ""}`}
-                        onClick={() => setRightTab("sessions")}
-                      >
-                        🗓 Sessions
-                        {selected.sessions.length > 0 && (
-                          <span className="main-tab-count">{selected.sessions.length}</span>
-                        )}
-                      </button>
-                      <button
-                        className={`main-tab-btn ${rightTab === "costs" ? "active" : ""}`}
-                        onClick={() => setRightTab("costs")}
-                      >
-                        💰 Coûts
-                      </button>
-                      <button
-                        className={`main-tab-btn ${rightTab === "config" ? "active" : ""}`}
-                        onClick={() => setRightTab("config")}
-                      >
-                        ⚙️ Configuration
-                      </button>
-                      <button
-                        className={`main-tab-btn ${rightTab === "files" ? "active" : ""}`}
-                        onClick={() => setRightTab("files")}
-                      >
-                        📁 Fichiers
-                        {totalFiles > 0 && (
-                          <span className="main-tab-count">{totalFiles}</span>
-                        )}
-                      </button>
+                      <button className={`main-tab-btn ${rightTab === "description" ? "active" : ""}`}
+                        onClick={() => setRightTab("description")}>📝 Description</button>
+                      <button className={`main-tab-btn ${rightTab === "sessions" ? "active" : ""}`}
+                        onClick={() => setRightTab("sessions")}>🗓 Sessions</button>
+                      <button className={`main-tab-btn ${rightTab === "costs" ? "active" : ""}`}
+                        onClick={() => setRightTab("costs")}>💰 Coûts</button>
+                      <button className={`main-tab-btn ${rightTab === "config" ? "active" : ""}`}
+                        onClick={() => setRightTab("config")}>⚙️ Configuration</button>
+                      <button className={`main-tab-btn ${rightTab === "files" ? "active" : ""}`}
+                        onClick={() => setRightTab("files")}>📁 Fichiers</button>
                     </div>
 
                     <div className="tab-content">
                       {rightTab === "description" && (
-                        <DescriptionTab
-                          selected={selected}
-                          onEdit={() => setEditorOpen(true)}
-                        />
+                        <DescriptionTab selected={selected} onEdit={() => setEditorOpen(true)} />
                       )}
                       {rightTab === "sessions" && (
                         <SessionsTab
@@ -444,7 +386,7 @@ function App() {
                           consumables={consumables}
                           printers={printers}
                           electricityPrice={electricityPrice}
-                          onSessionsChange={(sessions) =>
+                          onSessionsChange={sessions =>
                             persistSessions(sessions, selected.status, selected.quantity)
                           }
                         />
@@ -484,31 +426,22 @@ function App() {
         )}
       </main>
 
-      {/* ── Modal paramètres ── */}
       {settingsOpen && (
         <div className="modal-overlay" onClick={() => setSettingsOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h2>Paramètres</h2>
               <button className="btn-icon" onClick={() => setSettingsOpen(false)}>✕</button>
             </div>
             <div className="modal-section">
               <label className="modal-label">Slicer / outil externe</label>
-              <p className="modal-hint">
-                Clic droit sur un fichier 3MF ou STL pour l'ouvrir avec cet outil.
-              </p>
+              <p className="modal-hint">Clic droit sur un fichier 3MF ou STL pour l'ouvrir avec cet outil.</p>
               <div className="tool-path-row">
                 <span className="tool-path-display" title={toolPath ?? ""}>
                   {toolPath ? toolName(toolPath) : "Aucun outil configuré"}
                 </span>
-                <button className="btn-primary-sm" onClick={handlePickTool}>
-                  Parcourir…
-                </button>
-                {toolPath && (
-                  <button className="btn-danger-sm" onClick={handleClearTool}>
-                    ✕
-                  </button>
-                )}
+                <button className="btn-primary-sm" onClick={handlePickTool}>Parcourir…</button>
+                {toolPath && <button className="btn-danger-sm" onClick={handleClearTool}>✕</button>}
               </div>
               {toolPath && <p className="tool-path-full">{toolPath}</p>}
             </div>
@@ -516,10 +449,9 @@ function App() {
         </div>
       )}
 
-      {/* ── Modal lecteur vidéo ── */}
       {videoModal && (
         <div className="video-modal-overlay" onClick={() => setVideoModal(null)}>
-          <div className="video-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="video-modal" onClick={e => e.stopPropagation()}>
             <div className="video-modal-header">
               <span className="video-modal-title">{videoModal.name}</span>
               <button className="btn-icon" onClick={() => setVideoModal(null)} title="Fermer">✕</button>
@@ -529,7 +461,6 @@ function App() {
         </div>
       )}
 
-      {/* ── Menu contextuel ── */}
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}

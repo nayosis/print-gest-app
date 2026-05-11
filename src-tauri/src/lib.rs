@@ -63,6 +63,17 @@ pub struct Project {
     pub selling_price: f64,
 }
 
+// ── Tree ─────────────────────────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize)]
+pub struct FolderNode {
+    pub name: String,
+    pub path: String,
+    /// Some → projet, None → dossier groupe
+    pub project: Option<Project>,
+    pub children: Vec<FolderNode>,
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 struct Meta {
@@ -108,6 +119,67 @@ fn to_camel_case(s: &str) -> String {
         })
         .collect();
     first + &rest
+}
+
+fn is_project_dir(path: &Path) -> bool {
+    if path.join("meta.json").exists() { return true; }
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                match p.extension().and_then(|e| e.to_str()) {
+                    Some("f3d" | "3mf" | "stl" | "STL" | "mp4") => return true,
+                    _ => {}
+                }
+            }
+        }
+    }
+    false
+}
+
+fn scan_tree(path: &Path) -> FolderNode {
+    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let path_str = path.to_string_lossy().to_string();
+
+    if is_project_dir(path) {
+        return FolderNode {
+            name,
+            path: path_str,
+            project: Some(scan_project_dir(path)),
+            children: vec![],
+        };
+    }
+
+    let mut children: Vec<FolderNode> = fs::read_dir(path)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            let p = e.path();
+            if !p.is_dir() { return false; }
+            let n = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            n != "_meta" && !n.starts_with('.')
+        })
+        .map(|e| scan_tree(&e.path()))
+        .collect();
+
+    children.sort_by(|a, b| {
+        let a_folder = a.project.is_none();
+        let b_folder = b.project.is_none();
+        b_folder.cmp(&a_folder).then_with(|| {
+            let a_name = a.project.as_ref()
+                .map(|p| p.title.as_deref().unwrap_or(&p.name))
+                .unwrap_or(&a.name)
+                .to_lowercase();
+            let b_name = b.project.as_ref()
+                .map(|p| p.title.as_deref().unwrap_or(&p.name))
+                .unwrap_or(&b.name)
+                .to_lowercase();
+            a_name.cmp(&b_name)
+        })
+    });
+
+    FolderNode { name, path: path_str, project: None, children }
 }
 
 fn scan_project_dir(path: &Path) -> Project {
@@ -213,6 +285,55 @@ fn save_tags(project_path: String, tags: Vec<String>) -> Result<(), String> {
 }
 
 // ── Commandes ─────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn scan_folder_tree(folder_path: String) -> Result<FolderNode, String> {
+    let path = Path::new(&folder_path);
+    if !path.exists() || !path.is_dir() {
+        return Err(format!("Dossier introuvable : {}", folder_path));
+    }
+    Ok(scan_tree(path))
+}
+
+#[tauri::command]
+fn create_folder(parent_path: String, name: String) -> Result<FolderNode, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() { return Err("Le nom ne peut pas être vide.".into()); }
+    let path = Path::new(&parent_path).join(&name);
+    if path.exists() { return Err(format!("'{}' existe déjà.", name)); }
+    fs::create_dir_all(&path).map_err(|e| format!("Erreur création : {}", e))?;
+    Ok(scan_tree(&path))
+}
+
+#[tauri::command]
+fn rename_folder(path: String, new_name: String) -> Result<String, String> {
+    let new_name = new_name.trim().to_string();
+    if new_name.is_empty() { return Err("Le nom ne peut pas être vide.".into()); }
+    let old = Path::new(&path);
+    let parent = old.parent().ok_or("Impossible de trouver le dossier parent.")?;
+    let new_path = parent.join(&new_name);
+    if new_path.exists() {
+        return Err(format!("'{}' existe déjà.", new_name));
+    }
+    fs::rename(old, &new_path).map_err(|e| format!("Erreur renommage : {}", e))?;
+    Ok(new_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn move_item(from_path: String, to_parent_path: String) -> Result<String, String> {
+    let from = Path::new(&from_path);
+    let to_parent = Path::new(&to_parent_path);
+    if to_parent.starts_with(from) {
+        return Err("Impossible de déplacer un dossier dans lui-même.".into());
+    }
+    let name = from.file_name().ok_or("Nom invalide")?;
+    let dest = to_parent.join(name);
+    if dest.exists() {
+        return Err(format!("'{}' existe déjà dans la destination.", name.to_string_lossy()));
+    }
+    fs::rename(from, &dest).map_err(|e| format!("Erreur déplacement : {}", e))?;
+    Ok(dest.to_string_lossy().to_string())
+}
 
 #[tauri::command]
 fn scan_projects(folder_path: String) -> Result<Vec<Project>, String> {
@@ -675,7 +796,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            scan_folder_tree,
             scan_projects,
+            create_folder,
+            rename_folder,
+            move_item,
             refresh_project,
             create_project,
             rename_project,

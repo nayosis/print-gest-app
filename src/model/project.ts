@@ -18,6 +18,25 @@ export interface Project {
   selling_price: number;
 }
 
+export interface FolderNode {
+  name: string;
+  path: string;
+  project: Project | null;
+  children: FolderNode[];
+}
+
+export function flattenProjects(node: FolderNode): Project[] {
+  const result: Project[] = [];
+  if (node.project) result.push(node.project);
+  for (const child of node.children) result.push(...flattenProjects(child));
+  return result;
+}
+
+export function updateProjectInTree(node: FolderNode, updated: Project): FolderNode {
+  if (node.project?.path === updated.path) return { ...node, project: updated };
+  return { ...node, children: node.children.map(c => updateProjectInTree(c, updated)) };
+}
+
 export interface PrintInfo {
   print_time: string | null;
   weight_g: number | null;
