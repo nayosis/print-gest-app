@@ -13,11 +13,15 @@ pub struct Consumable {
     pub price: f64,
 }
 
+fn default_wear_rate() -> f64 { 1.0 }
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Printer {
     pub id: String,
     pub name: String,
     pub power_w: f64,
+    #[serde(default = "default_wear_rate")]
+    pub wear_rate: f64,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

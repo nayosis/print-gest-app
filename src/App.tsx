@@ -18,6 +18,7 @@ interface PrinterFormData {
   id: string;
   name: string;
   power_w: string;
+  wear_rate: string;
 }
 
 interface SessionForm {
@@ -454,6 +455,7 @@ function App() {
       id: printerForm.id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       name: printerForm.name.trim(),
       power_w: wNum,
+      wear_rate: Math.max(0, parseFloat(printerForm.wear_rate) || 0),
     };
     const updated = printerForm.id
       ? printers.map((pr) => (pr.id === printerForm.id ? p : pr))
@@ -658,15 +660,16 @@ function App() {
     : 0;
 
   // ── Calcul coût total d'une session ──
-  const sessionCost = (s: PrintSession): { mat: number; elec: number; labor: number } => {
+  const sessionCost = (s: PrintSession): { mat: number; elec: number; wear: number; labor: number } => {
     const mat = s.consumables.reduce((sum, sc) => {
       const c = consumables.find((x) => x.id === sc.consumable_id);
       return c ? sum + calcCost(c, sc.quantity) : sum;
     }, 0);
     const pr = printers.find((p) => p.id === s.printer_id);
     const elec = pr ? printerCost(pr, s.print_time_h, electricityPrice) : 0;
+    const wear = pr ? (pr.wear_rate ?? 1) * s.print_time_h : 0;
     const labor = (s.labor_time_h ?? 0) * (s.labor_rate ?? 0);
-    return { mat, elec, labor };
+    return { mat, elec, wear, labor };
   };
 
   return (
@@ -960,7 +963,7 @@ function App() {
               <div className="consumables-header">
                 <h2>🖨 Imprimantes</h2>
                 <button className="btn-primary-sm"
-                  onClick={() => setPrinterForm({ id: "", name: "", power_w: "" })}>+ Ajouter</button>
+                  onClick={() => setPrinterForm({ id: "", name: "", power_w: "", wear_rate: "1" })}>+ Ajouter</button>
               </div>
               {printerForm && (
                 <div className="cons-form">
@@ -971,6 +974,12 @@ function App() {
                       placeholder="Consommation *"
                       value={printerForm.power_w} onChange={(e) => setPrinterForm({ ...printerForm, power_w: e.target.value })} />
                     <span className="cons-form-unit">W</span>
+                  </div>
+                  <div className="cons-form-price-row">
+                    <input className="cons-form-input cons-form-price" type="number" min="0" step="0.1"
+                      placeholder="Usure *"
+                      value={printerForm.wear_rate} onChange={(e) => setPrinterForm({ ...printerForm, wear_rate: e.target.value })} />
+                    <span className="cons-form-unit">€/h (usure)</span>
                   </div>
                   <div className="cons-form-actions">
                     <button className="btn-cancel" onClick={() => setPrinterForm(null)}>Annuler</button>
@@ -988,16 +997,17 @@ function App() {
                       <div key={p.id} className="cons-item">
                         <div className="cons-item-info">
                           <span className="cons-item-name">{p.name}</span>
+                          <span className="cons-item-category">Usure : {(p.wear_rate ?? 1).toFixed(2)} €/h</span>
                         </div>
                         <span className="cons-item-price">{p.power_w} W</span>
                         {electricityPrice > 0 && (
                           <span className="cons-item-kwh-hint">
-                            {((p.power_w / 1000) * electricityPrice).toFixed(4)} €/h
+                            {((p.power_w / 1000) * electricityPrice).toFixed(4)} €/h élec.
                           </span>
                         )}
                         <div className="cons-item-actions">
                           <button className="btn-icon-sm" title="Modifier"
-                            onClick={() => setPrinterForm({ ...p, power_w: p.power_w.toString() })}>✏</button>
+                            onClick={() => setPrinterForm({ ...p, power_w: p.power_w.toString(), wear_rate: (p.wear_rate ?? 1).toString() })}>✏</button>
                           <button className="btn-icon-sm btn-danger-icon" title="Supprimer"
                             onClick={() => handleDeletePrinter(p.id)}>🗑</button>
                         </div>
@@ -1091,8 +1101,8 @@ function App() {
                   {selected.sessions.length === 0 ? (
                     <span className="summary-empty">Aucune session d'impression configurée</span>
                   ) : selected.sessions.map((s, idx) => {
-                    const { mat, elec, labor } = sessionCost(s);
-                    const total = mat + elec + labor;
+                    const { mat, elec, wear, labor } = sessionCost(s);
+                    const total = mat + elec + wear + labor;
                     const b64 = thumbnails[s.file_3mf];
                     return (
                       <div key={s.id} className="summary-mini-card">
@@ -1115,10 +1125,10 @@ function App() {
                 <div className="summary-totals-panel">
                   {(() => {
                     const grand = selected.sessions.reduce((acc, s) => {
-                      const { mat, elec, labor } = sessionCost(s);
-                      return { mat: acc.mat + mat, elec: acc.elec + elec, labor: acc.labor + labor };
-                    }, { mat: 0, elec: 0, labor: 0 });
-                    const prodTotal = grand.mat + grand.elec + grand.labor;
+                      const { mat, elec, wear, labor } = sessionCost(s);
+                      return { mat: acc.mat + mat, elec: acc.elec + elec, wear: acc.wear + wear, labor: acc.labor + labor };
+                    }, { mat: 0, elec: 0, wear: 0, labor: 0 });
+                    const prodTotal = grand.mat + grand.elec + grand.wear + grand.labor;
                     const costPerUnit = selected.quantity > 0 ? prodTotal / selected.quantity : 0;
                     const designCost = selected.design_time_h * selected.design_rate;
                     const hasSelling = selected.selling_price > 0;
@@ -1378,7 +1388,7 @@ function App() {
                             <div className="session-list">
                               {selected.sessions.map((s, idx) => {
                                 const pr = printers.find((p) => p.id === s.printer_id);
-                                const { mat, elec, labor } = sessionCost(s);
+                                const { mat, elec, wear, labor } = sessionCost(s);
                                 const thumb = thumbnails[s.file_3mf];
                                 return (
                                   <div key={s.id} className="session-card">
@@ -1411,12 +1421,13 @@ function App() {
                                         })}
                                       </div>
                                     )}
-                                    {(mat > 0 || elec > 0 || labor > 0) && (
+                                    {(mat > 0 || elec > 0 || wear > 0 || labor > 0) && (
                                       <div className="session-card-cost">
                                         {mat > 0 && <span>Matière : {mat.toFixed(2)} €</span>}
                                         {elec > 0 && <span>Électricité : {elec.toFixed(3)} €</span>}
+                                        {wear > 0 && <span>Usure : {wear.toFixed(2)} €</span>}
                                         {labor > 0 && <span>MO : {labor.toFixed(2)} €</span>}
-                                        <span className="session-card-total">Total : {(mat + elec + labor).toFixed(2)} €</span>
+                                        <span className="session-card-total">Total : {(mat + elec + wear + labor).toFixed(2)} €</span>
                                       </div>
                                     )}
                                   </div>
