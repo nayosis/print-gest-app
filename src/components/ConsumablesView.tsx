@@ -189,6 +189,12 @@ export function ConsumablesView({
                 value={printerForm.power_w} onChange={(e) => setPrinterForm({ ...printerForm, power_w: e.target.value })} />
               <span className="cons-form-unit">W</span>
             </div>
+            <div className="cons-form-price-row">
+              <input className="cons-form-input cons-form-price" type="number" min="0" step="0.1"
+                placeholder="Usure (défaut 1)"
+                value={printerForm.wear_rate} onChange={(e) => setPrinterForm({ ...printerForm, wear_rate: e.target.value })} />
+              <span className="cons-form-unit">€/h</span>
+            </div>
             <div className="cons-form-actions">
               <button className="btn-cancel" onClick={() => setPrinterForm(null)}>Annuler</button>
               <button className="btn-save" onClick={handleSavePrinter}
@@ -209,9 +215,10 @@ export function ConsumablesView({
                   <span className="cons-item-price">{p.power_w} W</span>
                   {electricityPrice > 0 && (
                     <span className="cons-item-kwh-hint">
-                      {((p.power_w / 1000) * electricityPrice).toFixed(4)} €/h
+                      élec {((p.power_w / 1000) * electricityPrice).toFixed(4)} €/h
                     </span>
                   )}
+                  <span className="cons-item-kwh-hint">usure {(p.wear_rate ?? 1).toFixed(2)} €/h</span>
                   <div className="cons-item-actions">
                     <button className="btn-icon-sm" title="Modifier"
                       onClick={() => setPrinterForm({ ...p, power_w: p.power_w.toString(), wear_rate: (p.wear_rate ?? 0).toString() })}>✏</button>

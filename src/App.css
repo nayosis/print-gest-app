@@ -2142,3 +2142,102 @@ body {
   color: #92400e;
   background: #fef3c7;
 }
+
+/* ── Cost Tab ─────────────────────────────────────────── */
+.cost-tab {
+  padding: 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+}
+
+.cost-session-block {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cost-totals-block {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.cost-session-title {
+  font-weight: 700;
+  font-size: 13px;
+  color: #1e1e2e;
+  margin-bottom: 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cost-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+  border-top: 1px dashed #e5e7eb;
+}
+
+.cost-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+  margin-bottom: 2px;
+}
+
+.cost-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+  padding: 1px 0;
+  gap: 8px;
+}
+
+.cost-row span:first-child {
+  color: #374151;
+  min-width: 0;
+  flex: 1;
+}
+
+.cost-row span:last-child {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-row-muted span:first-child { color: #9ca3af; font-size: 12px; }
+.cost-row-bold { font-weight: 700; }
+.cost-val-blue span:last-child { color: #3b5bdb; }
+.cost-val-green span:last-child { color: #166534; }
+.cost-val-red span:last-child { color: #c53030; }
+
+.cost-divider {
+  height: 1px;
+  background: #d1d5db;
+  margin: 4px 0;
+}
+
+.cost-breakeven {
+  font-size: 12px;
+  color: #166534;
+  font-weight: 600;
+  background: #dcfce7;
+  border-radius: 6px;
+  padding: 4px 8px;
+  text-align: center;
+  margin-top: 4px;
+}
+
+.cost-breakeven-warn {
+  color: #92400e;
+  background: #fef3c7;
+}

@@ -16,6 +16,7 @@ import { DescriptionTab } from "./components/DescriptionTab";
 import { SessionsTab } from "./components/SessionsTab";
 import { ConfigTab } from "./components/ConfigTab";
 import { FilesTab } from "./components/FilesTab";
+import { CostTab } from "./components/CostTab";
 import "./App.css";
 
 const STORAGE_KEY = "print-gest-root-folder";
@@ -50,7 +51,7 @@ function App() {
   const [electricityPrice, setElectricityPrice] = useState(0);
   const [showConsumablesView, setShowConsumablesView] = useState(false);
 
-  const [rightTab, setRightTab] = useState<"description" | "sessions" | "config" | "files">("description");
+  const [rightTab, setRightTab] = useState<"description" | "sessions" | "costs" | "config" | "files">("description");
 
   const [videoModal, setVideoModal] = useState<{ src: string; name: string } | null>(null);
 
@@ -407,6 +408,12 @@ function App() {
                         )}
                       </button>
                       <button
+                        className={`main-tab-btn ${rightTab === "costs" ? "active" : ""}`}
+                        onClick={() => setRightTab("costs")}
+                      >
+                        💰 Coûts
+                      </button>
+                      <button
                         className={`main-tab-btn ${rightTab === "config" ? "active" : ""}`}
                         onClick={() => setRightTab("config")}
                       >
@@ -440,6 +447,14 @@ function App() {
                           onSessionsChange={(sessions) =>
                             persistSessions(sessions, selected.status, selected.quantity)
                           }
+                        />
+                      )}
+                      {rightTab === "costs" && (
+                        <CostTab
+                          selected={selected}
+                          consumables={consumables}
+                          printers={printers}
+                          electricityPrice={electricityPrice}
                         />
                       )}
                       {rightTab === "config" && (

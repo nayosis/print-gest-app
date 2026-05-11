@@ -53,12 +53,13 @@ export function SummaryBar({
               return {
                 mat: acc.mat + cost.mat,
                 elec: acc.elec + cost.elec,
+                wear: acc.wear + cost.wear,
                 labor: acc.labor + cost.labor,
               };
             },
-            { mat: 0, elec: 0, labor: 0 }
+            { mat: 0, elec: 0, wear: 0, labor: 0 }
           );
-          const prodTotal = grand.mat + grand.elec + grand.labor;
+          const prodTotal = grand.mat + grand.elec + grand.wear + grand.labor;
           const costPerUnit = selected.quantity > 0 ? prodTotal / selected.quantity : 0;
           const designCost = selected.design_time_h * selected.design_rate;
           const hasSelling = selected.selling_price > 0;
