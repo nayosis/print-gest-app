@@ -38,8 +38,8 @@ export function ConfigTab({ selected, onQuantityChange, onPricingChange }: Confi
         <h2>Production</h2>
         <div className="config-row">
           <div className="config-row-info">
-            <span className="config-row-label">Quantité produite</span>
-            <span className="config-row-hint">Nombre d'objets fabriqués par ce projet</span>
+            <span className="config-row-label">Quantité produite par itérations</span>
+            <span className="config-row-hint">Nombre d'objets fabriqués par ce projet en une itérations, c'est à dire en ayant fais toutes les sessions.</span>
           </div>
           <div className="cost-summary-qty-ctrl">
             <button className="qty-btn" onClick={() => onQuantityChange(-1)} disabled={selected.quantity <= 1}>−</button>
